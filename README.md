@@ -56,4 +56,4 @@ Known limitations:
 
 ## License
 
-Not yet decided.
+MIT
