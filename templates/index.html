@@ -86,12 +86,18 @@
   <div class="stats">
     <span>Footprint: <b>{{ result.footprint }}</b></span>
     <span>Status: <b>{{ result.status }}</b></span>
-    <span>Solve time: <b>{{ result.elapsed }}s</b></span>
+    <span>Solve time: <b>{{ result.elapsed }}s</b>{% if result.zoned %} <b>(zoned)</b>{% endif %}</span>
     <span>Total area: <b>{{ result.total }} sf</b></span>
     <span>Circulation:
       {% if result.circulation_ok %}<b>OK, every room reachable</b>
       {% else %}<span class="warn">unreachable: {{ result.unreachable | join(", ") }}</span>{% endif %}
     </span>
+    {% if result.cross %}
+    <span>Zone connectors:
+      {% if result.cross.failed %}<span class="warn">failed: {{ result.cross.failed | map("join", "-") | join(", ") }}</span>
+      {% else %}<b>all OK</b>{% endif %}
+    </span>
+    {% endif %}
   </div>
 
   {{ result.svg | safe }}

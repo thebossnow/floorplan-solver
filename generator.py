@@ -183,3 +183,24 @@ def generate_program(total_area: int, beds: int = 3, baths: int = 2,
     # their own ensuite bath/closet
     private = tuple(bathroom_names) + tuple(f"{b}Closet" for b in bedroom_names)
     return fp, rooms, adj, private
+
+
+def zone_of_program(rooms: List[Room]) -> Dict[str, str]:
+    """Classifies a generate_program() room list into the "public"/"private"
+    zones zoning.solve_zoned() needs, for when a program is too large to
+    hand to solve() as one model. Hall touches every bedroom (not the
+    public rooms) in every style above, so it's part of the private wing,
+    not a public hub -- putting it in "public" instead turns one cross-zone
+    connector into one per bedroom/bathroom, which is exactly the
+    "too many cross-zone adjacencies on one room" case solve_zoned's
+    docstring warns tends to fail. Not meaningful for a hand-built room
+    list that doesn't follow this naming convention."""
+    zone_of = {}
+    for r in rooms:
+        n = r.name
+        if n == "Hall" or n in ("Primary", "PrimBath") or \
+                n.startswith(("Bed", "Bath")) or n.endswith("Closet"):
+            zone_of[n] = "private"
+        else:
+            zone_of[n] = "public"
+    return zone_of
