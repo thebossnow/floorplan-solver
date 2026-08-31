@@ -60,6 +60,30 @@ class Footprint:
         return a
 
 
+def add_closets(rooms, adjacencies, bedrooms, area=20, min_dim=3, max_aspect=3.0, min_shared=3):
+    """Attach a mandatory closet to each named bedroom.
+
+    A closet is just a small interior room plus a forced Adj to its
+    bedroom -- Adj is already a hard constraint, so the solver cannot
+    return a plan where that wall doesn't exist. Steal the closet's
+    area from the bedroom's own target_area beforehand if the two are
+    meant to share the same reserved footprint; this helper doesn't
+    touch the bedroom's target.
+
+    Returns new (rooms, adjacencies) lists. Closet names are
+    f"{bedroom}Closet"; include them in circulation_ok's `private` set
+    so they're never treated as a hallway pass-through.
+    """
+    rooms = list(rooms)
+    adjacencies = list(adjacencies)
+    for b in bedrooms:
+        closet = f"{b}Closet"
+        rooms.append(Room(closet, area, min_dim=min_dim, max_aspect=max_aspect,
+                           needs_exterior=False))
+        adjacencies.append(Adj(b, closet, min_shared=min_shared))
+    return rooms, adjacencies
+
+
 # ----------------------------------------------------------------------
 # Solver
 # ----------------------------------------------------------------------

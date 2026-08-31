@@ -28,6 +28,13 @@ qualifies. See `test_lshape.py`.
 
 The objective minimizes total deviation from the target area program.
 
+`Adj` is a hard constraint, not a preference — the solver has no
+feasible way to skip it. So "every bedroom must have a closet" is just
+a program-authoring pattern: give the closet its own small interior
+`Room` and force it onto the bedroom with `Adj`. The `add_closets()`
+helper does this for a list of bedroom names in one call. See how
+`test_house.py` uses it for `Primary` and `Bed2`.
+
 ## Install
 
 ```

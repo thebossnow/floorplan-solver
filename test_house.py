@@ -1,14 +1,14 @@
-from layout import Room, Adj, Footprint, solve, shared_walls, circulation_ok, to_svg
+from layout import Room, Adj, Footprint, solve, shared_walls, circulation_ok, to_svg, add_closets
 import time
 
 fp = Footprint(width=40, height=30)   # 1200 sf
 
 rooms = [
     Room("Entry",     48,  min_dim=6, max_aspect=2.5, edges=["S"]),
-    Room("Living",   260,  min_dim=12, max_aspect=1.8),
-    Room("Kitchen",  170,  min_dim=10, max_aspect=2.0),
-    Room("Dining",   130,  min_dim=10, max_aspect=1.8),
-    Room("Hall",      70,  min_dim=4,  max_aspect=8.0, needs_exterior=False),
+    Room("Living",   246,  min_dim=12, max_aspect=1.8),
+    Room("Kitchen",  160,  min_dim=10, max_aspect=2.0),
+    Room("Dining",   120,  min_dim=10, max_aspect=1.8),
+    Room("Hall",      60,  min_dim=4,  max_aspect=8.0, needs_exterior=False),
     Room("Primary",  200,  min_dim=12, max_aspect=1.6),
     Room("PrimBath",  72,  min_dim=6,  max_aspect=2.5),
     Room("Bed2",     140,  min_dim=10, max_aspect=1.6),
@@ -28,6 +28,11 @@ adj = [
     Adj("Kitchen", "Utility"),
 ]
 
+# every bedroom gets its own closet -- a small interior room forced (Adj is a
+# hard constraint) to share a door-sized wall with its bedroom
+rooms, adj = add_closets(rooms, adj, ["Primary", "Bed2"], area=22, min_dim=3, max_aspect=3.0)
+
+
 t = time.time()
 plan, status = solve(fp, rooms, adj, time_limit=60)
 print(f"status={status}  {time.time()-t:.1f}s")
@@ -42,7 +47,8 @@ if plan:
     print(f"  total {tot} / footprint {fp.area()}")
 
     ok, unreachable = circulation_ok(plan, "Entry",
-                                     private=("Primary", "Bed2", "PrimBath", "Bath2"))
+                                     private=("Primary", "Bed2", "PrimBath", "Bath2",
+                                              "PrimaryCloset", "Bed2Closet"))
     print(f"\ncirculation ok: {ok}  unreachable: {unreachable}")
     print(f"shared walls: {len(shared_walls(plan))}")
     print(to_svg(plan, fp, path="plan.svg"))
