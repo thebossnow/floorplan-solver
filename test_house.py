@@ -35,8 +35,8 @@ print(f"status={status}  {time.time()-t:.1f}s")
 if plan:
     tot = 0
     for n, r in sorted(plan.items()):
-        print(f"  {n:9s} {r['x2']-r['x1']:2d}x{r['y2']-r['y1']:2d} "
-              f"= {r['area']:4d} sf   (target {r['target']}, "
+        dims = "+".join(f"{p['x2']-p['x1']}x{p['y2']-p['y1']}" for p in r["parts"])
+        print(f"  {n:9s} {dims:9s} = {r['area']:4d} sf   (target {r['target']}, "
               f"delta {r['area']-r['target']:+d})")
         tot += r["area"]
     print(f"  total {tot} / footprint {fp.area()}")
