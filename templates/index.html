@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Floor Plan Solver</title>
+<style>
+  :root { color-scheme: light; }
+  body { font-family: -apple-system, Helvetica, Arial, sans-serif; max-width: 780px;
+         margin: 40px auto; padding: 0 16px; color: #222; background: #fbfaf7; }
+  h1 { font-size: 22px; margin-bottom: 4px; }
+  p.sub { color: #777; margin-top: 0; font-size: 14px; }
+  form { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px 16px;
+         background: #fff; border: 1px solid #e4e0d8; border-radius: 8px; padding: 18px; }
+  label { display: block; font-size: 12px; color: #555; margin-bottom: 4px; }
+  input, select { width: 100%; padding: 7px 8px; font-size: 14px; border: 1px solid #ccc;
+                  border-radius: 5px; box-sizing: border-box; }
+  button { grid-column: 1 / -1; padding: 10px; font-size: 14px; font-weight: 600;
+           background: #222; color: #fff; border: none; border-radius: 5px; cursor: pointer; }
+  button:hover { background: #444; }
+  .error { background: #fdecec; border: 1px solid #f3c6c6; color: #a33; padding: 12px;
+           border-radius: 6px; margin-top: 20px; font-size: 14px; }
+  .result { margin-top: 24px; }
+  .stats { display: flex; gap: 24px; flex-wrap: wrap; font-size: 13px; color: #555;
+           margin-bottom: 12px; }
+  .stats b { color: #222; }
+  svg { max-width: 100%; height: auto; border: 1px solid #e4e0d8; border-radius: 6px;
+        background: #fff; }
+  table { border-collapse: collapse; margin-top: 16px; font-size: 13px; width: 100%; }
+  th, td { text-align: left; padding: 4px 10px; border-bottom: 1px solid #eee; }
+  th { color: #777; font-weight: 500; }
+  .warn { color: #a33; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<h1>Floor Plan Solver</h1>
+<p class="sub">Enter your foundation footprint and program; a constraint solver (OR-Tools CP-SAT) lays out a gap-free floor plan that fits it exactly.</p>
+
+<form method="post">
+  <div>
+    <label for="area">Foundation area (sq ft)</label>
+    <input type="number" id="area" name="area" min="{{ min_area }}" max="{{ max_area }}"
+           value="{{ form.area }}" required>
+  </div>
+  <div>
+    <label for="beds">Bedrooms</label>
+    <select id="beds" name="beds">
+      {% for n in range(1, max_beds + 1) %}
+      <option value="{{ n }}" {{ "selected" if form.beds == n }}>{{ n }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div>
+    <label for="baths">Bathrooms</label>
+    <select id="baths" name="baths">
+      {% for n in range(1, max_baths + 1) %}
+      <option value="{{ n }}" {{ "selected" if form.baths == n }}>{{ n }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div>
+    <label for="shape">Foundation shape</label>
+    <select id="shape" name="shape">
+      <option value="rectangular" {{ "selected" if form.shape == "rectangular" }}>Rectangular</option>
+      <option value="square" {{ "selected" if form.shape == "square" }}>Square</option>
+    </select>
+  </div>
+  <button type="submit">Generate floor plan</button>
+</form>
+
+{% if error %}
+<div class="error">{{ error }}</div>
+{% endif %}
+
+{% if result %}
+<div class="result">
+  <div class="stats">
+    <span>Footprint: <b>{{ result.footprint }}</b></span>
+    <span>Status: <b>{{ result.status }}</b></span>
+    <span>Solve time: <b>{{ result.elapsed }}s</b></span>
+    <span>Total area: <b>{{ result.total }} sf</b></span>
+    <span>Circulation:
+      {% if result.circulation_ok %}<b>OK, every room reachable</b>
+      {% else %}<span class="warn">unreachable: {{ result.unreachable | join(", ") }}</span>{% endif %}
+    </span>
+  </div>
+
+  {{ result.svg | safe }}
+
+  <table>
+    <tr><th>Room</th><th>Area (sf)</th><th>Target (sf)</th><th>Delta</th></tr>
+    {% for name, area, target in result.rooms %}
+    <tr><td>{{ name }}</td><td>{{ area }}</td><td>{{ target }}</td>
+        <td>{{ "%+d" | format(area - target) }}</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+
+</body>
+</html>

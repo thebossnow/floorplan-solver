@@ -1,1 +1,2 @@
 ortools>=9.10
+flask>=3.0

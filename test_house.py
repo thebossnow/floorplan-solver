@@ -46,8 +46,10 @@ if plan:
         tot += r["area"]
     print(f"  total {tot} / footprint {fp.area()}")
 
+    # only leaf rooms are private -- bedrooms must stay non-private so BFS
+    # can relay through them to reach their own ensuite bath/closet
     ok, unreachable = circulation_ok(plan, "Entry",
-                                     private=("Primary", "Bed2", "PrimBath", "Bath2",
+                                     private=("PrimBath", "Bath2",
                                               "PrimaryCloset", "Bed2Closet"))
     print(f"\ncirculation ok: {ok}  unreachable: {unreachable}")
     print(f"shared walls: {len(shared_walls(plan))}")

@@ -52,6 +52,24 @@ python3 test_house.py
 python3 test_lshape.py
 ```
 
+## Web app
+
+`app.py` is a small Flask front end: enter a foundation area (sq ft),
+bed/bath counts, and square vs. rectangular, and it solves and renders
+a floor plan inline. `generator.py` turns those four inputs into a
+Room/Adj program (a fixed proportional room mix, closets included via
+`add_closets()`) and hands it to `solve()`.
+
+```
+python3 app.py
+```
+
+then open http://localhost:5000. Each request runs a real solve
+(capped at 25s server-side — a capped solve may come back FEASIBLE
+rather than OPTIMAL, still a valid layout) so it isn't instant; this
+runs the dev server only; put it behind gunicorn/nginx (or similar)
+for anything but local use.
+
 ## Status
 
 Prototype. Verified on a single test program:
@@ -71,6 +89,9 @@ Known limitations:
 - Room area targets must sum exactly to the footprint area
 - Slows down past roughly 15 rooms in one solve; larger programs need
   to be split by zone and stitched together
+- `app.py`'s room mix (`generator.py`) is one fixed proportional
+  layout, not a design system; large bed/bath counts on a small area
+  can produce no feasible layout within the time cap
 
 ## License
 
