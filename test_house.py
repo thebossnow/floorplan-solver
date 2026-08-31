@@ -45,4 +45,4 @@ if plan:
                                      private=("Primary", "Bed2", "PrimBath", "Bath2"))
     print(f"\ncirculation ok: {ok}  unreachable: {unreachable}")
     print(f"shared walls: {len(shared_walls(plan))}")
-    print(to_svg(plan, fp, path="/home/claude/plan.svg"))
+    print(to_svg(plan, fp, path="plan.svg"))
