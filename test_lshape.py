@@ -1,4 +1,4 @@
-from layout import Room, Adj, Footprint, solve, shared_walls, circulation_ok, to_svg
+from layout import Room, Adj, Footprint, solve, shared_walls, circulation_ok, to_svg, place_openings
 import time
 
 fp = Footprint(width=24, height=20)   # 480 sf
@@ -39,4 +39,6 @@ if plan:
     ok, unreachable = circulation_ok(plan, "Entry", private=("Bath",))
     print(f"circulation ok: {ok}  unreachable: {unreachable}")
     print(f"shared walls: {len(shared_walls(plan))}")
-    print(to_svg(plan, fp, path="plan_lshape.svg"))
+    openings = place_openings(plan, fp, adj, rooms)
+    print(f"openings placed: {len(openings)}")
+    print(to_svg(plan, fp, path="plan_lshape.svg", openings=openings))

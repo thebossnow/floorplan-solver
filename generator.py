@@ -7,6 +7,8 @@ uses), not a design system -- it exists to drive the web form in
 app.py. For anything bespoke, build the Room/Adj list by hand instead.
 """
 
+from typing import Dict, List, Tuple
+
 from layout import Room, Adj, Footprint, add_closets
 
 MIN_AREA = 400
@@ -38,6 +40,33 @@ FLOORS = {
 }
 BED_FLOOR = 75
 BATH_FLOOR = 35
+
+
+def shelf_pack_hint(footprint: Footprint, rooms: List[Room]) -> Dict[str, Tuple[int, int, int, int]]:
+    """Rough shelf-packing layout used only as a CP-SAT warm-start hint for
+    solve() -- it doesn't need to be feasible (rooms may run past the
+    footprint's height; those are simply left unhinted), just a starting
+    point closer to a real solution than CP-SAT's own default assignment.
+    Only covers single-part rooms (multi-part rooms are keyed as
+    f"{name}#{i}" in solve()'s part-key namespace, which this doesn't
+    populate -- CP-SAT places those unassisted)."""
+    W, H = footprint.width, footprint.height
+    hint = {}
+    x, y, shelf_h = 0, 0, 0
+    for r in sorted(rooms, key=lambda r: -r.target_area):
+        if r.parts != 1:
+            continue
+        side = max(r.min_dim, round(r.target_area ** 0.5))
+        w = min(side, W)
+        h = max(r.min_dim, round(r.target_area / w))
+        if x + w > W:
+            x, y, shelf_h = 0, y + shelf_h, 0
+        if y >= H:
+            continue
+        hint[r.name] = (x, y, min(x + w, W), min(y + h, H))
+        x += w
+        shelf_h = max(shelf_h, h)
+    return hint
 
 
 def make_footprint(total_area: int, shape: str = "rectangular", aspect: float = 1.4) -> Footprint:

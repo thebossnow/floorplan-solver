@@ -70,6 +70,32 @@ rather than OPTIMAL, still a valid layout) so it isn't instant; this
 runs the dev server only; put it behind gunicorn/nginx (or similar)
 for anything but local use.
 
+## Robustness &amp; rendering extras
+
+- `solve()` calls `validate_program()` first, so a self-inconsistent room
+  (e.g. `min_dim` too large for its own area bounds) or an over/under
+  -programmed footprint raises a specific `ValueError` immediately, instead
+  of a low-level OR-Tools domain error or a full `time_limit` spent on a
+  solve that could never succeed.
+- `place_openings()` picks a door per adjacency and a window per
+  daylight-required room from the solved geometry, using the same wall
+  segments `shared_walls()` already finds; pass the result into `to_svg`'s
+  `openings=` argument.
+- `to_svg` renders room rectangles inset by a wall thickness
+  (`interior_thickness` / `exterior_thickness`, still centerline in the
+  solver itself) and merges a multi-part room's rectangles into one L/T/U
+  outline instead of drawing a visible seam between parts.
+- `to_svg(..., path=None)` returns the markup string directly instead of
+  writing to disk — use this from a server, since writing every request to
+  the same path is a race (this is what `app.py` does now).
+- `solve()` takes an optional `hint` (a `{part_key: (x1,y1,x2,y2)}` warm
+  start); `generator.shelf_pack_hint()` produces one from a rough packing
+  heuristic. **Empirically this did not reduce solve time or improve
+  solution quality** in spot checks against CP-SAT's default 8-worker
+  portfolio search on 18-room programs — it's left in as opt-in
+  infrastructure (e.g. for a single-worker config or a better heuristic
+  later), not a fix for the scaling limit below.
+
 ## Status
 
 Prototype. Verified on a single test program:
@@ -81,17 +107,15 @@ Prototype. Verified on a single test program:
 
 Known limitations:
 
-- L/T/U-shaped rooms (`parts>1`) render as their constituent rectangles
-  in the SVG, with a visible seam — no merged polygon outline yet
-- Zero wall thickness (dimensions are centerline)
-- No door or window placement (though `shared_walls()` returns every
-  usable wall segment, so this is a short pass away)
-- Room area targets must sum exactly to the footprint area
-- Slows down past roughly 15 rooms in one solve; larger programs need
-  to be split by zone and stitched together
+- Room area targets must sum exactly to the footprint area (now a fast,
+  clear error via `validate_program()` rather than a silent timeout)
+- Slows down past roughly 15 rooms in one solve; the warm-start hint above
+  didn't fix this in testing, so larger programs still need to be split by
+  zone and stitched together — the likely real fix
 - `app.py`'s room mix (`generator.py`) is one fixed proportional
   layout, not a design system; large bed/bath counts on a small area
-  can produce no feasible layout within the time cap
+  can still produce no feasible layout within the time cap (though you'll
+  now find out immediately rather than after a full timeout)
 
 ## License
 

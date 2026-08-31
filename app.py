@@ -11,8 +11,8 @@ import time
 
 from flask import Flask, render_template, request
 
-from generator import MAX_AREA, MAX_BATHS, MAX_BEDS, MIN_AREA, generate_program
-from layout import circulation_ok, solve, to_svg
+from generator import MAX_AREA, MAX_BATHS, MAX_BEDS, MIN_AREA, generate_program, shelf_pack_hint
+from layout import circulation_ok, place_openings, solve, to_svg
 
 TIME_LIMIT = 25.0
 
@@ -41,14 +41,16 @@ def index():
                 form["area"], form["beds"], form["baths"], form["shape"])
 
             t0 = time.time()
-            plan, status = solve(fp, rooms, adj, time_limit=TIME_LIMIT, workers=8)
+            hint = shelf_pack_hint(fp, rooms)
+            plan, status = solve(fp, rooms, adj, time_limit=TIME_LIMIT, workers=8, hint=hint)
             elapsed = time.time() - t0
 
             if not plan:
                 error = (f"No layout found ({status}) within {TIME_LIMIT:.0f}s. "
                          "Try a larger area, fewer bedrooms/bathrooms, or a different shape.")
             else:
-                svg_markup = open(to_svg(plan, fp, path="/tmp/plan_web.svg")).read()
+                openings = place_openings(plan, fp, adj, rooms)
+                svg_markup = to_svg(plan, fp, path=None, openings=openings)
                 ok, unreachable = circulation_ok(plan, "Entry", private=private)
                 result = dict(
                     svg=svg_markup,

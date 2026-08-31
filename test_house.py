@@ -1,4 +1,5 @@
-from layout import Room, Adj, Footprint, solve, shared_walls, circulation_ok, to_svg, add_closets
+from layout import (Room, Adj, Footprint, solve, shared_walls, circulation_ok, to_svg,
+                     add_closets, place_openings)
 import time
 
 fp = Footprint(width=40, height=30)   # 1200 sf
@@ -53,4 +54,6 @@ if plan:
                                               "PrimaryCloset", "Bed2Closet"))
     print(f"\ncirculation ok: {ok}  unreachable: {unreachable}")
     print(f"shared walls: {len(shared_walls(plan))}")
-    print(to_svg(plan, fp, path="plan.svg"))
+    openings = place_openings(plan, fp, adj, rooms)
+    print(f"openings placed: {len(openings)}")
+    print(to_svg(plan, fp, path="plan.svg", openings=openings))

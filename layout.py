@@ -88,6 +88,56 @@ def add_closets(rooms, adjacencies, bedrooms, area=20, min_dim=3, max_aspect=3.0
 # Solver
 # ----------------------------------------------------------------------
 
+def validate_program(footprint: Footprint, rooms: List[Room], adjacencies: List[Adj]):
+    """Raise ValueError with a specific, actionable message for a
+    self-inconsistent program, instead of letting OR-Tools fail deep inside
+    model-building on an invalid variable domain, or burning the full solve
+    time_limit on a program that can never fit the footprint."""
+    names = {r.name for r in rooms}
+    if len(names) != len(rooms):
+        raise ValueError("room names must be unique")
+
+    for r in rooms:
+        if r.min_dim <= 0:
+            raise ValueError(f"{r.name}: min_dim must be positive, got {r.min_dim}")
+        if r.max_aspect < 1:
+            raise ValueError(f"{r.name}: max_aspect must be >= 1, got {r.max_aspect}")
+        if r.parts < 1:
+            raise ValueError(f"{r.name}: parts must be >= 1, got {r.parts}")
+        lo, hi = r.bounds()
+        if lo > hi:
+            raise ValueError(f"{r.name}: min_area ({lo}) exceeds max_area ({hi})")
+        part_lo = r.min_dim * r.min_dim
+        if part_lo > hi:
+            raise ValueError(
+                f"{r.name}: min_dim={r.min_dim} forces at least {part_lo} sf per part, "
+                f"but this room's area only ranges up to {hi} sf (target_area={r.target_area}) "
+                "-- raise target_area/max_area or lower min_dim"
+            )
+
+    for ad in adjacencies:
+        if ad.a not in names:
+            raise ValueError(f"adjacency references unknown room {ad.a!r}")
+        if ad.b not in names:
+            raise ValueError(f"adjacency references unknown room {ad.b!r}")
+        if ad.min_shared <= 0:
+            raise ValueError(f"adjacency {ad.a}-{ad.b}: min_shared must be positive")
+
+    total_lo = sum(r.bounds()[0] for r in rooms)
+    total_hi = sum(r.bounds()[1] for r in rooms)
+    fa = footprint.area()
+    if total_lo > fa:
+        raise ValueError(
+            f"program needs at least {total_lo} sf across all rooms, "
+            f"but the footprint is only {fa} sf"
+        )
+    if total_hi < fa:
+        raise ValueError(
+            f"program's rooms max out at {total_hi} sf combined, "
+            f"but the footprint is {fa} sf -- add rooms or raise max_area/target_area"
+        )
+
+
 def _touch_cases(m, W, H, x1, x2, y1, y2, a, b, min_len, tag):
     """Boolean literals, one per side (a-right-of-b, etc), true when a and
     b share a wall segment >= min_len long. Caller enforces with add_bool_or
@@ -124,7 +174,16 @@ def solve(footprint: Footprint,
           adjacencies: List[Adj],
           time_limit: float = 30.0,
           seed: int = 0,
-          workers: int = 8):
+          workers: int = 8,
+          hint: Optional[Dict[str, Tuple[int, int, int, int]]] = None):
+    """hint: optional {part_key: (x1, y1, x2, y2)} warm start, in the same
+    part-key namespace as Room.parts (the room name itself for a single-part
+    room, f"{name}#{i}" for part i of a multi-part room). Doesn't need to be
+    a feasible layout -- it's just a starting point for CP-SAT's search, so a
+    fast approximate packer (see generator.shelf_pack_hint) is enough. Parts
+    missing from the dict are left for CP-SAT to place unassisted."""
+
+    validate_program(footprint, rooms, adjacencies)
 
     W, H = footprint.width, footprint.height
     m = cp_model.CpModel()
@@ -154,6 +213,16 @@ def solve(footprint: Footprint,
             yiv[pk] = m.new_interval_var(y1[pk], h[pk], y2[pk], f"{pk}_yi")
 
             m.add_multiplication_equality(area[pk], [w[pk], h[pk]])
+
+            if hint and pk in hint:
+                hx1, hy1, hx2, hy2 = hint[pk]
+                m.add_hint(x1[pk], hx1)
+                m.add_hint(y1[pk], hy1)
+                m.add_hint(x2[pk], hx2)
+                m.add_hint(y2[pk], hy2)
+                m.add_hint(w[pk], hx2 - hx1)
+                m.add_hint(h[pk], hy2 - hy1)
+                m.add_hint(area[pk], (hx2 - hx1) * (hy2 - hy1))
 
             # aspect ratio, expressed with integer math
             num = int(round(r.max_aspect * 100))
@@ -301,7 +370,158 @@ def circulation_ok(plan, entry, private=()):
     return seen == set(plan), sorted(set(plan) - seen)
 
 
-def to_svg(plan, fp: Footprint, scale=14, path="plan.svg"):
+def place_openings(plan, fp: Footprint, adjacencies: List[Adj], rooms: List[Room],
+                    door_width: float = 3.0, window_width: float = 4.0):
+    """Best-effort door/window placement from the solved geometry alone --
+    no solver change. One door per adjacency, centered on the longest wall
+    segment shared by any pair of parts from the two rooms (same overlap
+    test as shared_walls(), but this needs the segment's actual position,
+    not just its length). One window per daylight-required room, centered
+    on its longest exterior-touching segment.
+
+    Returns a list of dicts: kind ("door"/"window"), orient ("V"/"H"), and
+    an (x1, y1, x2, y2) box in grid units -- a thin rect along the wall,
+    ready for to_svg to draw. An adjacency the solver satisfied on a
+    segment shorter than door_width (allowed, since Adj.min_shared can be
+    less) is skipped rather than drawing an oversized door.
+    """
+    def best_shared_segment(a_parts, b_parts, min_len):
+        best = None
+        for A in a_parts:
+            for B in b_parts:
+                if A["x2"] == B["x1"] or B["x2"] == A["x1"]:
+                    x = A["x2"] if A["x2"] == B["x1"] else A["x1"]
+                    lo, hi = max(A["y1"], B["y1"]), min(A["y2"], B["y2"])
+                    if hi - lo >= min_len and (best is None or hi - lo > best[2]):
+                        best = ("V", x, hi - lo, lo, hi)
+                elif A["y2"] == B["y1"] or B["y2"] == A["y1"]:
+                    y = A["y2"] if A["y2"] == B["y1"] else A["y1"]
+                    lo, hi = max(A["x1"], B["x1"]), min(A["x2"], B["x2"])
+                    if hi - lo >= min_len and (best is None or hi - lo > best[2]):
+                        best = ("H", y, hi - lo, lo, hi)
+        return best
+
+    def centered_box(orient, fixed, lo, hi, width):
+        mid = (lo + hi) / 2
+        c1, c2 = mid - width / 2, mid + width / 2
+        if orient == "V":
+            return dict(orient="V", x1=fixed, x2=fixed, y1=c1, y2=c2)
+        return dict(orient="H", y1=fixed, y2=fixed, x1=c1, x2=c2)
+
+    openings = []
+    for ad in adjacencies:
+        seg = best_shared_segment(plan[ad.a]["parts"], plan[ad.b]["parts"], door_width)
+        if not seg:
+            continue
+        orient, fixed, _, lo, hi = seg
+        openings.append(dict(kind="door", rooms=(ad.a, ad.b),
+                              **centered_box(orient, fixed, lo, hi, door_width)))
+
+    W, H = fp.width, fp.height
+    for r in rooms:
+        if not r.needs_exterior:
+            continue
+        best = None
+        for part in plan[r.name]["parts"]:
+            for is_vert, val, bound in (
+                (True, part["x1"], 0), (True, part["x2"], W),
+                (False, part["y1"], 0), (False, part["y2"], H),
+            ):
+                if val != bound:
+                    continue
+                lo, hi = (part["y1"], part["y2"]) if is_vert else (part["x1"], part["x2"])
+                seg_len = hi - lo
+                if seg_len >= window_width and (best is None or seg_len > best[0]):
+                    best = (seg_len, is_vert, bound, lo, hi)
+        if not best:
+            continue
+        _, is_vert, bound, lo, hi = best
+        orient = "V" if is_vert else "H"
+        openings.append(dict(kind="window", rooms=(r.name,),
+                              **centered_box(orient, bound, lo, hi, window_width)))
+    return openings
+
+
+def _room_polygon(parts):
+    """Merge a multi-part room's rectangles (glued edge-to-edge by solve())
+    into one boundary polygon, so it renders as a single L/T/U outline
+    instead of separate rectangles with a visible seam. Works via edge
+    cancellation: an edge shared by two parts is interior and drops out;
+    whatever's left is the union's boundary. Since solve()'s glue
+    constraint guarantees the parts are edge-connected with no holes, that
+    boundary is always one simple loop, so tracing it is a plain walk.
+    Callers should only call this for len(parts) > 1 -- a single part is
+    just its own rectangle."""
+    v_edges, h_edges = [], []  # (coord, lo, hi, sign)
+    for p in parts:
+        v_edges.append((p["x2"], p["y1"], p["y2"], +1))   # right edge: material to -x side
+        v_edges.append((p["x1"], p["y1"], p["y2"], -1))   # left edge: material to +x side
+        h_edges.append((p["y2"], p["x1"], p["x2"], +1))   # top edge: material to -y side
+        h_edges.append((p["y1"], p["x1"], p["x2"], -1))   # bottom edge: material to +y side
+
+    def cancel_and_merge(edges):
+        by_coord = {}
+        for coord, lo, hi, sign in edges:
+            by_coord.setdefault(coord, []).append((lo, hi, sign))
+        out = []
+        for coord, items in by_coord.items():
+            points = sorted({v for lo, hi, _ in items for v in (lo, hi)})
+            kept = []
+            for i in range(len(points) - 1):
+                a, b = points[i], points[i + 1]
+                mid = (a + b) / 2
+                net = sum(sign for lo, hi, sign in items if lo <= mid <= hi)
+                if net != 0:
+                    kept.append([a, b])
+            merged = []
+            for lo, hi in kept:
+                if merged and merged[-1][1] == lo:
+                    merged[-1][1] = hi
+                else:
+                    merged.append([lo, hi])
+            out.extend((coord, lo, hi) for lo, hi in merged)
+        return out
+
+    v_out = cancel_and_merge(v_edges)  # (x, ylo, yhi)
+    h_out = cancel_and_merge(h_edges)  # (y, xlo, xhi)
+
+    adj = {}
+    for x, lo, hi in v_out:
+        p1, p2 = (x, lo), (x, hi)
+        adj.setdefault(p1, []).append(p2)
+        adj.setdefault(p2, []).append(p1)
+    for y, lo, hi in h_out:
+        p1, p2 = (lo, y), (hi, y)
+        adj.setdefault(p1, []).append(p2)
+        adj.setdefault(p2, []).append(p1)
+
+    start = next(iter(adj))
+    loop, prev, cur = [start], None, start
+    while True:
+        nxts = [n for n in adj[cur] if n != prev]
+        nxt = nxts[0] if nxts else adj[cur][0]
+        if nxt == start:
+            break
+        loop.append(nxt)
+        prev, cur = cur, nxt
+    return loop
+
+
+def to_svg(plan, fp: Footprint, scale=14, path="plan.svg", openings=None,
+           interior_thickness=0.3, exterior_thickness=0.5):
+    """Renders the plan to SVG. If path is None, returns the markup string
+    directly instead of writing to disk -- use this from a server handling
+    concurrent requests, since writing every request to the same path is a
+    race. openings is the optional list of dicts from place_openings().
+
+    Room rectangles are drawn inset from their solved (centerline)
+    coordinates by half a wall thickness, using exterior_thickness on a
+    footprint-boundary edge and interior_thickness/2 on an edge shared with
+    another room (each side of a shared wall contributes half). Multi-part
+    (L/T/U) rooms are drawn as one merged outline via _room_polygon() and
+    skip the thickness inset -- doing both at once would mean insetting
+    per polygon edge based on what's across it, which isn't worth the
+    complexity while the seam-merge itself is still new."""
     W, H = fp.width, fp.height
     p = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{W*scale+40}" '
          f'height="{H*scale+40}" viewBox="-20 -20 {W*scale+40} {H*scale+40}">',
@@ -312,23 +532,50 @@ def to_svg(plan, fp: Footprint, scale=14, path="plan.svg"):
     for n, room in plan.items():
         parts = room["parts"]
         biggest = max(parts, key=lambda pt: pt["area"])
+        if len(parts) > 1:
+            poly = _room_polygon(parts)
+            pts = " ".join(f"{gx*scale},{(H-gy)*scale}" for gx, gy in poly)
+            p.append(f'<polygon points="{pts}" fill="#fff" stroke="#222" stroke-width="3"/>')
         for part in parts:
-            px, py = part["x1"] * scale, (H - part["y2"]) * scale
-            pw, ph = (part["x2"] - part["x1"]) * scale, (part["y2"] - part["y1"]) * scale
-            p.append(f'<rect x="{px}" y="{py}" width="{pw}" height="{ph}" '
-                     f'fill="#fff" stroke="#222" stroke-width="3"/>')
+            if len(parts) > 1:
+                ix1, ix2, iy1, iy2 = part["x1"], part["x2"], part["y1"], part["y2"]
+            else:
+                ix1 = part["x1"] + (exterior_thickness if part["x1"] == 0 else interior_thickness / 2)
+                ix2 = part["x2"] - (exterior_thickness if part["x2"] == W else interior_thickness / 2)
+                iy1 = part["y1"] + (exterior_thickness if part["y1"] == 0 else interior_thickness / 2)
+                iy2 = part["y2"] - (exterior_thickness if part["y2"] == H else interior_thickness / 2)
+                px, py = ix1 * scale, (H - iy2) * scale
+                pw, ph = (ix2 - ix1) * scale, (iy2 - iy1) * scale
+                p.append(f'<rect x="{px}" y="{py}" width="{pw}" height="{ph}" '
+                         f'fill="#fff" stroke="#222" stroke-width="3"/>')
+            cx, cy = (ix1 + ix2) / 2 * scale, (H - (iy1 + iy2) / 2) * scale
             dims = f'{part["x2"]-part["x1"]}x{part["y2"]-part["y1"]}'
             if part is biggest:
-                p.append(f'<text x="{px+pw/2}" y="{py+ph/2-3}" font-family="Helvetica" '
+                p.append(f'<text x="{cx}" y="{cy-3}" font-family="Helvetica" '
                          f'font-size="12" text-anchor="middle" fill="#222">{n}</text>')
-                p.append(f'<text x="{px+pw/2}" y="{py+ph/2+11}" font-family="Helvetica" '
+                p.append(f'<text x="{cx}" y="{cy+11}" font-family="Helvetica" '
                          f'font-size="10" text-anchor="middle" fill="#888">'
                          f'{dims} / {room["area"]}sf</text>')
             else:
-                p.append(f'<text x="{px+pw/2}" y="{py+ph/2+4}" font-family="Helvetica" '
+                p.append(f'<text x="{cx}" y="{cy+4}" font-family="Helvetica" '
                          f'font-size="9" text-anchor="middle" fill="#aaa">{dims}</text>')
     p.append(f'<rect x="0" y="0" width="{W*scale}" height="{H*scale}" '
              f'fill="none" stroke="#222" stroke-width="6"/>')
+    opening_thickness = 4
+    for o in openings or []:
+        if o["orient"] == "V":
+            ox = o["x1"] * scale - opening_thickness / 2
+            oy = (H - o["y2"]) * scale
+            ow, oh = opening_thickness, (o["y2"] - o["y1"]) * scale
+        else:
+            ox = o["x1"] * scale
+            oy = (H - o["y1"]) * scale - opening_thickness / 2
+            ow, oh = (o["x2"] - o["x1"]) * scale, opening_thickness
+        color = "#fbfaf7" if o["kind"] == "door" else "#7fb3d5"
+        p.append(f'<rect x="{ox}" y="{oy}" width="{ow}" height="{oh}" fill="{color}"/>')
     p.append("</svg>")
-    open(path, "w").write("\n".join(p))
+    markup = "\n".join(p)
+    if path is None:
+        return markup
+    open(path, "w").write(markup)
     return path
