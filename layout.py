@@ -33,6 +33,11 @@ class Room:
     needs_exterior: bool = True   # needs a window
     edges: List[str] = field(default_factory=list)  # forced: N/S/E/W, applies to part 0
     parts: int = 1                # rectangles making up the room; 2+ = L/T/U-shaped
+    must_cover: Optional[Tuple[str, int, int]] = None  # (axis, lo, hi): part 0 must
+        # span at least [lo, hi] on "x" or "y" -- pins *where* along an edge a room
+        # sits, which Room.edges alone doesn't (it only pins *which* edge). Used by
+        # zoning.solve_zoned() to force two independently-solved zones' connector
+        # rooms to overlap at a shared coordinate, not just share a wall somewhere.
 
     def bounds(self):
         lo = self.min_area if self.min_area is not None else int(self.target_area * 0.85)
@@ -104,6 +109,12 @@ def validate_program(footprint: Footprint, rooms: List[Room], adjacencies: List[
             raise ValueError(f"{r.name}: max_aspect must be >= 1, got {r.max_aspect}")
         if r.parts < 1:
             raise ValueError(f"{r.name}: parts must be >= 1, got {r.parts}")
+        if r.must_cover is not None:
+            axis, mlo, mhi = r.must_cover
+            if axis not in ("x", "y"):
+                raise ValueError(f"{r.name}: must_cover axis must be 'x' or 'y', got {axis!r}")
+            if mlo >= mhi:
+                raise ValueError(f"{r.name}: must_cover range is empty ({mlo}, {mhi})")
         lo, hi = r.bounds()
         if lo > hi:
             raise ValueError(f"{r.name}: min_area ({lo}) exceeds max_area ({hi})")
@@ -235,6 +246,11 @@ def solve(footprint: Footprint,
                     if e == "E": m.add(x2[pk] == W)
                     if e == "S": m.add(y1[pk] == 0)
                     if e == "N": m.add(y2[pk] == H)
+                if r.must_cover:
+                    axis, mlo, mhi = r.must_cover
+                    lo1, hi1 = (x1, x2) if axis == "x" else (y1, y2)
+                    m.add(lo1[pk] <= mlo)
+                    m.add(hi1[pk] >= mhi)
 
         tarea[n] = m.new_int_var(lo, hi, f"{n}_totarea")
         m.add(tarea[n] == sum(area[pk] for pk in pks))

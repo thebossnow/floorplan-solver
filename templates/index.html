@@ -66,6 +66,14 @@
       <option value="square" {{ "selected" if form.shape == "square" }}>Square</option>
     </select>
   </div>
+  <div>
+    <label for="style">Room style</label>
+    <select id="style" name="style">
+      {% for s in styles %}
+      <option value="{{ s }}" {{ "selected" if form.style == s }}>{{ s.replace("_", " ") | title }}</option>
+      {% endfor %}
+    </select>
+  </div>
   <button type="submit">Generate floor plan</button>
 </form>
 

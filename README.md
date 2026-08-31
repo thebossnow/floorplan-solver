@@ -55,10 +55,15 @@ python3 test_lshape.py
 ## Web app
 
 `app.py` is a small Flask front end: enter a foundation area (sq ft),
-bed/bath counts, and square vs. rectangular, and it solves and renders
-a floor plan inline. `generator.py` turns those four inputs into a
-Room/Adj program (a fixed proportional room mix, closets included via
-`add_closets()`) and hands it to `solve()`.
+bed/bath counts, square vs. rectangular, and a room style, and it solves
+and renders a floor plan inline. `generator.py` turns those inputs into a
+Room/Adj program (closets included via `add_closets()`) and hands it to
+`solve()`. The room style (`generator.STYLES`) picks the public-room mix
+-- `traditional` (separate Living/Kitchen/Dining) or `open_concept` (one
+larger `Great` room) -- while the bedroom/bathroom wing stays the same
+either way; `generator._fit_targets()` scales whichever mix is chosen so
+room area targets always sum to exactly the footprint area, regardless of
+style, bed/bath count, or how hard its per-room area floors bite.
 
 ```
 python3 app.py
@@ -96,6 +101,39 @@ for anything but local use.
   infrastructure (e.g. for a single-worker config or a better heuristic
   later), not a fix for the scaling limit below.
 
+## Zoning: splitting large programs
+
+`zoning.solve_zoned()` is the real fix for the >15-room slowdown: split
+the room program into exactly two zones (e.g. a public wing and a
+bedroom wing), and it divides the footprint into two adjacent
+sub-footprints (proportioned to each zone's room-area total) and solves
+each with the ordinary `solve()` -- so within a zone every hard
+constraint is still exact, just over a smaller, faster problem.
+
+```python
+zone_of = {"Entry": "public", "Living": "public", ..., "Primary": "private", ...}
+plan, status, cross = solve_zoned(footprint, rooms, adjacencies, zone_of,
+                                   split_axis="x", time_limit=20)
+```
+
+Adjacencies that cross the zone boundary can't be a hard guarantee the
+way they are within one zone -- two independently-solved zones have no
+way to coordinate where along their shared wall a room ends up.
+`solve_zoned()` does its best (anchors each cross-zone room to the wall
+that faces the other zone, and pins it to a shared coordinate band along
+that wall so the two rooms' extents actually have to overlap) and then
+tells you the truth: `cross["satisfied"]` / `cross["failed"]` name which
+cross-zone adjacencies actually ended up touching. If the anchor pins
+would have made an otherwise-solvable zone infeasible (seen with a
+hallway anchored to the boundary while also required to touch six
+bedrooms), that zone is retried without them rather than failing outright
+-- see `test_zoned.py` for both outcomes. Keep cross-zone adjacencies to
+a small number of connector rooms for the best odds of a real doorway.
+
+```
+python3 test_zoned.py
+```
+
 ## Status
 
 Prototype. Verified on a single test program:
@@ -109,13 +147,18 @@ Known limitations:
 
 - Room area targets must sum exactly to the footprint area (now a fast,
   clear error via `validate_program()` rather than a silent timeout)
-- Slows down past roughly 15 rooms in one solve; the warm-start hint above
-  didn't fix this in testing, so larger programs still need to be split by
-  zone and stitched together — the likely real fix
-- `app.py`'s room mix (`generator.py`) is one fixed proportional
-  layout, not a design system; large bed/bath counts on a small area
-  can still produce no feasible layout within the time cap (though you'll
-  now find out immediately rather than after a full timeout)
+- Slows down past roughly 15 rooms in a single `solve()` call; the
+  warm-start hint above didn't fix this in testing, so use
+  `zoning.solve_zoned()` for larger programs instead (see below)
+- `generator.py` now offers two room-mix styles (`STYLES`, selectable in
+  the web form: `traditional`, `open_concept`) instead of one fixed
+  layout, but it's still a couple of hand-authored proportional mixes,
+  not a design system; large bed/bath counts on a small area can still
+  produce no feasible layout within the time cap (though you'll now find
+  out immediately rather than after a full timeout)
+- `solve_zoned()` only splits into exactly 2 zones along one axis; a
+  program that needs 3+ zones (e.g. public / private / garage wings) has
+  to be split pairwise by hand, one `solve_zoned()` call at a time
 
 ## License
 

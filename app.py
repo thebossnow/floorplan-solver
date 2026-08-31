@@ -11,7 +11,7 @@ import time
 
 from flask import Flask, render_template, request
 
-from generator import MAX_AREA, MAX_BATHS, MAX_BEDS, MIN_AREA, generate_program, shelf_pack_hint
+from generator import MAX_AREA, MAX_BATHS, MAX_BEDS, MIN_AREA, STYLES, generate_program, shelf_pack_hint
 from layout import circulation_ok, place_openings, solve, to_svg
 
 TIME_LIMIT = 25.0
@@ -21,7 +21,7 @@ app = Flask(__name__)
 
 @app.route("/", methods=["GET", "POST"])
 def index():
-    form = dict(area=1500, beds=3, baths=2, shape="rectangular")
+    form = dict(area=1500, beds=3, baths=2, shape="rectangular", style="traditional")
     result = None
     error = None
 
@@ -31,14 +31,17 @@ def index():
             form["beds"] = int(request.form.get("beds", ""))
             form["baths"] = int(request.form.get("baths", ""))
             form["shape"] = request.form.get("shape", "rectangular")
+            form["style"] = request.form.get("style", "traditional")
 
             if not (MIN_AREA <= form["area"] <= MAX_AREA):
                 raise ValueError(f"Area must be between {MIN_AREA} and {MAX_AREA} sq ft.")
             if form["shape"] not in ("square", "rectangular"):
                 raise ValueError("Shape must be square or rectangular.")
+            if form["style"] not in STYLES:
+                raise ValueError(f"Style must be one of {', '.join(STYLES)}.")
 
             fp, rooms, adj, private = generate_program(
-                form["area"], form["beds"], form["baths"], form["shape"])
+                form["area"], form["beds"], form["baths"], form["shape"], form["style"])
 
             t0 = time.time()
             hint = shelf_pack_hint(fp, rooms)
@@ -68,6 +71,7 @@ def index():
     return render_template(
         "index.html", form=form, result=result, error=error,
         max_beds=MAX_BEDS, max_baths=MAX_BATHS, min_area=MIN_AREA, max_area=MAX_AREA,
+        styles=list(STYLES),
     )
 
 
