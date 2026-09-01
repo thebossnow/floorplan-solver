@@ -21,12 +21,23 @@
     --accent: #9A3B2F;
   }
   * { box-sizing: border-box; }
-  body { font-family: 'IBM Plex Sans', Arial, sans-serif; max-width: 900px;
+  body { font-family: 'IBM Plex Sans', Arial, sans-serif; max-width: 1080px;
          margin: 40px auto; padding: 0 16px; color: var(--ink); background: var(--sheet); }
   h1 { font-family: 'IBM Plex Serif', Georgia, serif; font-weight: 600;
        font-size: 26px; margin-bottom: 4px; letter-spacing: 0.2px; }
   p.sub { color: var(--ink-soft); margin-top: 0; font-size: 14px; max-width: 46em; }
-  form { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px 16px;
+
+  .layout { display: grid; grid-template-columns: 1fr; grid-template-areas: "spec";
+            gap: 24px; margin-top: 24px; align-items: start; }
+  .layout.has-result { grid-template-columns: 300px 1fr; grid-template-areas: "spec drawing"; }
+  .spec-col { grid-area: spec; max-width: 340px; justify-self: start; }
+  .drawing-col { grid-area: drawing; min-width: 0; }
+  @media (max-width: 860px) {
+    .layout.has-result { grid-template-columns: 1fr; grid-template-areas: "drawing" "spec"; }
+    .spec-col { max-width: none; }
+  }
+
+  form { display: grid; grid-template-columns: 1fr; gap: 14px;
          background: var(--sheet-2); border: 1px solid var(--grid); border-radius: 10px;
          padding: 20px; }
   label { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
@@ -37,27 +48,33 @@
   input:focus, select:focus, button:focus-visible {
     outline: 2px solid var(--ink); outline-offset: 1px;
   }
-  button { grid-column: 1 / -1; padding: 12px; font-size: 14px; font-weight: 600;
+  button { padding: 12px; font-size: 14px; font-weight: 600;
            font-family: inherit; background: var(--accent); color: #fdf9f0; border: none;
            border-radius: 7px; cursor: pointer; transition: transform 150ms, background 150ms; }
   button:hover { background: #832f25; }
   button:active { transform: scale(0.98); }
   button:disabled { background: #b08076; cursor: progress; }
+
   .error { background: #f6e4e0; border: 1px solid #e0b7ac; color: var(--accent);
-           padding: 12px 14px; border-radius: 8px; margin-top: 20px; font-size: 14px; }
-  .result { margin-top: 28px; }
+           padding: 12px 14px; border-radius: 8px; margin-top: 16px; font-size: 14px; }
+
+  .legend { margin-top: 16px; font-size: 12px; color: var(--ink-soft); }
+  .legend div { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+
   .headline { font-size: 17px; font-weight: 500; margin-bottom: 2px; }
   .headline .num { font-family: 'IBM Plex Mono', monospace; font-variant-numeric: tabular-nums; }
   .circulation { font-size: 13px; color: var(--ink-soft); margin-bottom: 14px; }
   .warn { color: var(--accent); font-weight: 600; }
   svg { max-width: 100%; height: auto; border: 1px solid var(--grid); border-radius: 8px;
         background: var(--sheet); }
-  details { margin: 14px 0; font-size: 13px; color: var(--ink-soft); }
+
+  details { margin: 20px 0 0; font-size: 13px; color: var(--ink-soft); }
   details summary { cursor: pointer; user-select: none; }
   details[open] summary { margin-bottom: 6px; }
   .solver-info span { display: inline-block; margin-right: 18px; }
   .solver-info b { color: var(--ink); font-weight: 500; }
-  table { border-collapse: collapse; margin-top: 18px; font-size: 13px; width: 100%; }
+
+  table { border-collapse: collapse; margin-top: 12px; font-size: 13px; width: 100%; }
   th, td { text-align: left; padding: 5px 10px; border-bottom: 1px solid var(--grid);
            font-variant-numeric: tabular-nums; }
   td:nth-child(2), td:nth-child(3), td:nth-child(4),
@@ -67,11 +84,9 @@
   tr.group-row td { padding-top: 14px; font-size: 10px; text-transform: uppercase;
                      letter-spacing: 0.08em; color: var(--ink-soft); border-bottom: none; }
   .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px;
-            margin-right: 8px; border: 1px solid rgba(0,0,0,0.15); vertical-align: middle; }
+            margin-right: 8px; border: 1px solid rgba(0,0,0,0.15); vertical-align: middle;
+            flex-shrink: 0; }
   .delta-miss { color: var(--accent); }
-  @media (max-width: 640px) {
-    form { grid-template-columns: repeat(2, 1fr); }
-  }
   @media (prefers-reduced-motion: reduce) {
     button { transition: none; }
   }
@@ -82,92 +97,106 @@
 <h1>Floor Plan Solver</h1>
 <p class="sub">Give it a foundation and a program, and it tiles every room to the inch — no gaps, no overlaps, doors and windows placed where the walls actually allow them.</p>
 
-<form method="post" id="plan-form">
-  <div>
-    <label for="area">Foundation area (sq ft)</label>
-    <input type="number" id="area" name="area" min="{{ min_area }}" max="{{ max_area }}"
-           value="{{ form.area }}" required>
-  </div>
-  <div>
-    <label for="beds">Bedrooms</label>
-    <select id="beds" name="beds">
-      {% for n in range(1, max_beds + 1) %}
-      <option value="{{ n }}" {{ "selected" if form.beds == n }}>{{ n }}</option>
-      {% endfor %}
-    </select>
-  </div>
-  <div>
-    <label for="baths">Bathrooms</label>
-    <select id="baths" name="baths">
-      {% for n in range(1, max_baths + 1) %}
-      <option value="{{ n }}" {{ "selected" if form.baths == n }}>{{ n }}</option>
-      {% endfor %}
-    </select>
-  </div>
-  <div>
-    <label for="shape">Foundation shape</label>
-    <select id="shape" name="shape">
-      <option value="rectangular" {{ "selected" if form.shape == "rectangular" }}>Rectangular</option>
-      <option value="square" {{ "selected" if form.shape == "square" }}>Square</option>
-    </select>
-  </div>
-  <div>
-    <label for="style">Room style</label>
-    <select id="style" name="style">
-      {% for s in styles %}
-      <option value="{{ s }}" {{ "selected" if form.style == s }}>{{ s.replace("_", " ") | title }}</option>
-      {% endfor %}
-    </select>
-  </div>
-  <button type="submit" id="generate-btn">Draw this house</button>
-</form>
+<div class="layout {{ 'has-result' if result }}">
+  <div class="spec-col">
+    <form method="post" id="plan-form">
+      <div>
+        <label for="area">Foundation area (sq ft)</label>
+        <input type="number" id="area" name="area" min="{{ min_area }}" max="{{ max_area }}"
+               value="{{ form.area }}" required>
+      </div>
+      <div>
+        <label for="beds">Bedrooms</label>
+        <select id="beds" name="beds">
+          {% for n in range(1, max_beds + 1) %}
+          <option value="{{ n }}" {{ "selected" if form.beds == n }}>{{ n }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="baths">Bathrooms</label>
+        <select id="baths" name="baths">
+          {% for n in range(1, max_baths + 1) %}
+          <option value="{{ n }}" {{ "selected" if form.baths == n }}>{{ n }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="shape">Foundation shape</label>
+        <select id="shape" name="shape">
+          <option value="rectangular" {{ "selected" if form.shape == "rectangular" }}>Rectangular</option>
+          <option value="square" {{ "selected" if form.shape == "square" }}>Square</option>
+        </select>
+      </div>
+      <div>
+        <label for="style">Room style</label>
+        <select id="style" name="style">
+          {% for s in styles %}
+          <option value="{{ s }}" {{ "selected" if form.style == s }}>{{ s.replace("_", " ") | title }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <button type="submit" id="generate-btn">Draw this house</button>
+    </form>
 
-{% if error %}
-<div class="error">{{ error }}</div>
-{% endif %}
+    {% if error %}
+    <div class="error">{{ error }}</div>
+    {% endif %}
 
-{% if result %}
-<div class="result">
-  <div class="headline">
-    <span class="num">{{ result.headline }}</span>
-  </div>
-  <div class="circulation">
-    {% if result.circulation_ok %}Every room reachable from the entry.
-    {% else %}<span class="warn">Unreachable from the entry: {{ result.unreachable | join(", ") }}</span>{% endif %}
-    {% if result.cross and result.cross.failed %}
-      <span class="warn">· connector not satisfied: {{ result.cross.failed | map("join", " – ") | join(", ") }}</span>
+    {% if result %}
+    <div class="legend">
+      <div><span class="swatch" style="background:{{ living }}"></span>Public — living, dining, kitchen</div>
+      <div><span class="swatch" style="background:{{ sleep }}"></span>Private — bedrooms, closets</div>
+      <div><span class="swatch" style="background:{{ wet }}"></span>Service — baths, utility</div>
+    </div>
     {% endif %}
   </div>
 
-  {{ result.svg | safe }}
-
-  <details>
-    <summary>How this was built</summary>
-    <div class="solver-info">
-      <span>Status <b>{{ result.status }}</b></span>
-      <span>Solve time <b>{{ result.elapsed }}s</b>{% if result.zoned %} <b>(zoned)</b>{% endif %}</span>
-      <span>Footprint <b>{{ result.footprint }}</b></span>
-      <span>Total area <b>{{ result.total }} sf</b></span>
+  {% if result %}
+  <div class="drawing-col">
+    <div class="headline">
+      <span class="num">{{ result.headline }}</span>
     </div>
-  </details>
-
-  <table>
-    <tr><th>Room</th><th>Area</th><th>Target</th><th>Delta</th></tr>
-    {% set ns = namespace(group="") %}
-    {% for r in result.rooms %}
-      {% if r.group != ns.group %}
-      <tr class="group-row"><td colspan="4">{{ r.group }}</td></tr>
-      {% set ns.group = r.group %}
+    <div class="circulation">
+      {% if result.circulation_ok %}Every room reachable from the entry.
+      {% else %}<span class="warn">Unreachable from the entry: {{ result.unreachable | join(", ") }}</span>{% endif %}
+      {% if result.cross and result.cross.failed %}
+        <span class="warn">· connector not satisfied: {{ result.cross.failed | map("join", " – ") | join(", ") }}</span>
       {% endif %}
-      <tr>
-        <td><span class="swatch" style="background:{{ r.swatch }}"></span>{{ r.name }}</td>
-        <td>{{ r.area }} sf</td>
-        <td>{{ r.target }} sf</td>
-        <td class="{{ 'delta-miss' if r.delta|abs > 10 else '' }}">{{ "%+d" | format(r.delta) }}</td>
-      </tr>
-    {% endfor %}
-  </table>
+    </div>
+
+    {{ result.svg | safe }}
+
+    <details>
+      <summary>How this was built</summary>
+      <div class="solver-info">
+        <span>Status <b>{{ result.status }}</b></span>
+        <span>Solve time <b>{{ result.elapsed }}s</b>{% if result.zoned %} <b>(zoned)</b>{% endif %}</span>
+        <span>Footprint <b>{{ result.footprint }}</b></span>
+        <span>Total area <b>{{ result.total }} sf</b></span>
+      </div>
+    </details>
+  </div>
+  {% endif %}
 </div>
+
+{% if result %}
+<table>
+  <tr><th>Room</th><th>Area</th><th>Target</th><th>Delta</th></tr>
+  {% set ns = namespace(group="") %}
+  {% for r in result.rooms %}
+    {% if r.group != ns.group %}
+    <tr class="group-row"><td colspan="4">{{ r.group }}</td></tr>
+    {% set ns.group = r.group %}
+    {% endif %}
+    <tr>
+      <td><span class="swatch" style="background:{{ r.swatch }}"></span>{{ r.name }}</td>
+      <td>{{ r.area }} sf</td>
+      <td>{{ r.target }} sf</td>
+      <td class="{{ 'delta-miss' if r.delta|abs > 10 else '' }}">{{ "%+d" | format(r.delta) }}</td>
+    </tr>
+  {% endfor %}
+</table>
 {% endif %}
 
 <script>

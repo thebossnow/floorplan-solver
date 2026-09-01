@@ -130,6 +130,7 @@ def index():
         "index.html", form=form, result=result, error=error,
         max_beds=MAX_BEDS, max_baths=MAX_BATHS, min_area=MIN_AREA, max_area=MAX_AREA,
         styles=list(STYLES),
+        living=FILL_BY_KIND["living"], sleep=FILL_BY_KIND["sleep"], wet=FILL_BY_KIND["wet"],
     )
 
 
