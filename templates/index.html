@@ -4,40 +4,85 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Floor Plan Solver</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Serif:wght@600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
-  :root { color-scheme: light; }
-  body { font-family: -apple-system, Helvetica, Arial, sans-serif; max-width: 780px;
-         margin: 40px auto; padding: 0 16px; color: #222; background: #fbfaf7; }
-  h1 { font-size: 22px; margin-bottom: 4px; }
-  p.sub { color: #777; margin-top: 0; font-size: 14px; }
-  form { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px 16px;
-         background: #fff; border: 1px solid #e4e0d8; border-radius: 8px; padding: 18px; }
-  label { display: block; font-size: 12px; color: #555; margin-bottom: 4px; }
-  input, select { width: 100%; padding: 7px 8px; font-size: 14px; border: 1px solid #ccc;
-                  border-radius: 5px; box-sizing: border-box; }
-  button { grid-column: 1 / -1; padding: 10px; font-size: 14px; font-weight: 600;
-           background: #222; color: #fff; border: none; border-radius: 5px; cursor: pointer; }
-  button:hover { background: #444; }
-  .error { background: #fdecec; border: 1px solid #f3c6c6; color: #a33; padding: 12px;
-           border-radius: 6px; margin-top: 20px; font-size: 14px; }
-  .result { margin-top: 24px; }
-  .stats { display: flex; gap: 24px; flex-wrap: wrap; font-size: 13px; color: #555;
-           margin-bottom: 12px; }
-  .stats b { color: #222; }
-  svg { max-width: 100%; height: auto; border: 1px solid #e4e0d8; border-radius: 6px;
-        background: #fff; }
-  table { border-collapse: collapse; margin-top: 16px; font-size: 13px; width: 100%; }
-  th, td { text-align: left; padding: 4px 10px; border-bottom: 1px solid #eee; }
-  th { color: #777; font-weight: 500; }
-  .warn { color: #a33; font-weight: 600; }
+  :root {
+    color-scheme: light;
+    --sheet: #EDE6D6;
+    --sheet-2: #F4EFE4;
+    --ink: #1C1915;
+    --ink-soft: #6b6355;
+    --grid: #D9D0BE;
+    --living: #E4C9A0;
+    --sleep: #C9D4C2;
+    --wet: #B7C9C8;
+    --accent: #9A3B2F;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: 'IBM Plex Sans', Arial, sans-serif; max-width: 900px;
+         margin: 40px auto; padding: 0 16px; color: var(--ink); background: var(--sheet); }
+  h1 { font-family: 'IBM Plex Serif', Georgia, serif; font-weight: 600;
+       font-size: 26px; margin-bottom: 4px; letter-spacing: 0.2px; }
+  p.sub { color: var(--ink-soft); margin-top: 0; font-size: 14px; max-width: 46em; }
+  form { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px 16px;
+         background: var(--sheet-2); border: 1px solid var(--grid); border-radius: 10px;
+         padding: 20px; }
+  label { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+          color: var(--ink-soft); margin-bottom: 5px; }
+  input, select { width: 100%; padding: 8px 9px; font-size: 14px; font-family: inherit;
+                  color: var(--ink); border: 1px solid var(--grid); background: #fff;
+                  border-radius: 6px; box-sizing: border-box; }
+  input:focus, select:focus, button:focus-visible {
+    outline: 2px solid var(--ink); outline-offset: 1px;
+  }
+  button { grid-column: 1 / -1; padding: 12px; font-size: 14px; font-weight: 600;
+           font-family: inherit; background: var(--accent); color: #fdf9f0; border: none;
+           border-radius: 7px; cursor: pointer; transition: transform 150ms, background 150ms; }
+  button:hover { background: #832f25; }
+  button:active { transform: scale(0.98); }
+  button:disabled { background: #b08076; cursor: progress; }
+  .error { background: #f6e4e0; border: 1px solid #e0b7ac; color: var(--accent);
+           padding: 12px 14px; border-radius: 8px; margin-top: 20px; font-size: 14px; }
+  .result { margin-top: 28px; }
+  .headline { font-size: 17px; font-weight: 500; margin-bottom: 2px; }
+  .headline .num { font-family: 'IBM Plex Mono', monospace; font-variant-numeric: tabular-nums; }
+  .circulation { font-size: 13px; color: var(--ink-soft); margin-bottom: 14px; }
+  .warn { color: var(--accent); font-weight: 600; }
+  svg { max-width: 100%; height: auto; border: 1px solid var(--grid); border-radius: 8px;
+        background: var(--sheet); }
+  details { margin: 14px 0; font-size: 13px; color: var(--ink-soft); }
+  details summary { cursor: pointer; user-select: none; }
+  details[open] summary { margin-bottom: 6px; }
+  .solver-info span { display: inline-block; margin-right: 18px; }
+  .solver-info b { color: var(--ink); font-weight: 500; }
+  table { border-collapse: collapse; margin-top: 18px; font-size: 13px; width: 100%; }
+  th, td { text-align: left; padding: 5px 10px; border-bottom: 1px solid var(--grid);
+           font-variant-numeric: tabular-nums; }
+  td:nth-child(2), td:nth-child(3), td:nth-child(4),
+  th:nth-child(2), th:nth-child(3), th:nth-child(4) { font-family: 'IBM Plex Mono', monospace; }
+  th { color: var(--ink-soft); font-weight: 500; text-transform: uppercase;
+       font-size: 10px; letter-spacing: 0.06em; }
+  tr.group-row td { padding-top: 14px; font-size: 10px; text-transform: uppercase;
+                     letter-spacing: 0.08em; color: var(--ink-soft); border-bottom: none; }
+  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px;
+            margin-right: 8px; border: 1px solid rgba(0,0,0,0.15); vertical-align: middle; }
+  .delta-miss { color: var(--accent); }
+  @media (max-width: 640px) {
+    form { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    button { transition: none; }
+  }
 </style>
 </head>
 <body>
 
 <h1>Floor Plan Solver</h1>
-<p class="sub">Enter your foundation footprint and program; a constraint solver (OR-Tools CP-SAT) lays out a gap-free floor plan that fits it exactly.</p>
+<p class="sub">Give it a foundation and a program, and it tiles every room to the inch — no gaps, no overlaps, doors and windows placed where the walls actually allow them.</p>
 
-<form method="post">
+<form method="post" id="plan-form">
   <div>
     <label for="area">Foundation area (sq ft)</label>
     <input type="number" id="area" name="area" min="{{ min_area }}" max="{{ max_area }}"
@@ -74,7 +119,7 @@
       {% endfor %}
     </select>
   </div>
-  <button type="submit">Generate floor plan</button>
+  <button type="submit" id="generate-btn">Draw this house</button>
 </form>
 
 {% if error %}
@@ -83,34 +128,55 @@
 
 {% if result %}
 <div class="result">
-  <div class="stats">
-    <span>Footprint: <b>{{ result.footprint }}</b></span>
-    <span>Status: <b>{{ result.status }}</b></span>
-    <span>Solve time: <b>{{ result.elapsed }}s</b>{% if result.zoned %} <b>(zoned)</b>{% endif %}</span>
-    <span>Total area: <b>{{ result.total }} sf</b></span>
-    <span>Circulation:
-      {% if result.circulation_ok %}<b>OK, every room reachable</b>
-      {% else %}<span class="warn">unreachable: {{ result.unreachable | join(", ") }}</span>{% endif %}
-    </span>
-    {% if result.cross %}
-    <span>Zone connectors:
-      {% if result.cross.failed %}<span class="warn">failed: {{ result.cross.failed | map("join", "-") | join(", ") }}</span>
-      {% else %}<b>all OK</b>{% endif %}
-    </span>
+  <div class="headline">
+    <span class="num">{{ result.headline }}</span>
+  </div>
+  <div class="circulation">
+    {% if result.circulation_ok %}Every room reachable from the entry.
+    {% else %}<span class="warn">Unreachable from the entry: {{ result.unreachable | join(", ") }}</span>{% endif %}
+    {% if result.cross and result.cross.failed %}
+      <span class="warn">· connector not satisfied: {{ result.cross.failed | map("join", " – ") | join(", ") }}</span>
     {% endif %}
   </div>
 
   {{ result.svg | safe }}
 
+  <details>
+    <summary>How this was built</summary>
+    <div class="solver-info">
+      <span>Status <b>{{ result.status }}</b></span>
+      <span>Solve time <b>{{ result.elapsed }}s</b>{% if result.zoned %} <b>(zoned)</b>{% endif %}</span>
+      <span>Footprint <b>{{ result.footprint }}</b></span>
+      <span>Total area <b>{{ result.total }} sf</b></span>
+    </div>
+  </details>
+
   <table>
-    <tr><th>Room</th><th>Area (sf)</th><th>Target (sf)</th><th>Delta</th></tr>
-    {% for name, area, target in result.rooms %}
-    <tr><td>{{ name }}</td><td>{{ area }}</td><td>{{ target }}</td>
-        <td>{{ "%+d" | format(area - target) }}</td></tr>
+    <tr><th>Room</th><th>Area</th><th>Target</th><th>Delta</th></tr>
+    {% set ns = namespace(group="") %}
+    {% for r in result.rooms %}
+      {% if r.group != ns.group %}
+      <tr class="group-row"><td colspan="4">{{ r.group }}</td></tr>
+      {% set ns.group = r.group %}
+      {% endif %}
+      <tr>
+        <td><span class="swatch" style="background:{{ r.swatch }}"></span>{{ r.name }}</td>
+        <td>{{ r.area }} sf</td>
+        <td>{{ r.target }} sf</td>
+        <td class="{{ 'delta-miss' if r.delta|abs > 10 else '' }}">{{ "%+d" | format(r.delta) }}</td>
+      </tr>
     {% endfor %}
   </table>
 </div>
 {% endif %}
+
+<script>
+  document.getElementById('plan-form').addEventListener('submit', function () {
+    var btn = document.getElementById('generate-btn');
+    btn.disabled = true;
+    btn.textContent = 'Searching layouts…';
+  });
+</script>
 
 </body>
 </html>

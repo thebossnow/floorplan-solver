@@ -13,9 +13,50 @@ consecutive parts.
 Units are integer feet on a 1ft grid. Change GRID to use 6in units.
 """
 
+import re
 from dataclasses import dataclass, field
 from typing import List, Dict, Tuple, Optional
 from ortools.sat.python import cp_model
+
+
+# ----------------------------------------------------------------------
+# Drawing palette (vellum sheet, not the CAD-dump cream/black default)
+# ----------------------------------------------------------------------
+
+SHEET = "#EDE6D6"     # vellum background
+INK = "#1C1915"       # graphite, not pure black
+GRID = "#D9D0BE"      # faint 1ft graph under the plan
+LIVING = "#E4C9A0"    # oak -- entry/living/dining/kitchen/great room
+SLEEP = "#C9D4C2"     # linen -- bedrooms
+WET = "#B7C9C8"       # tile -- baths/utility
+ACCENT = "#9A3B2F"    # iron-oxide -- windows, used sparingly
+
+FONT_SANS = "'IBM Plex Sans', Arial, sans-serif"
+FONT_MONO = "'IBM Plex Mono', 'Courier New', monospace"
+
+
+def room_kind(name: str) -> str:
+    """Classifies a room name for fill color. Hall is left neutral (reads
+    as circulation, not a room); everything else buckets into the
+    living/sleep/wet groups an architectural plan conventionally uses."""
+    if name.endswith("Closet"):
+        return "closet"
+    if name == "Hall":
+        return "hall"
+    if name == "Primary" or name.startswith("Bed"):
+        return "sleep"
+    if name == "PrimBath" or name.startswith("Bath") or name == "Utility":
+        return "wet"
+    return "living"
+
+
+def display_name(name: str) -> str:
+    """"PrimBath" -> "PRIM BATH", "Bed2Closet" -> "BED 2 CLOSET" -- splits
+    camelCase and letter/digit boundaries so generated room names read as
+    architectural labels instead of Python identifiers."""
+    s = re.sub(r"(?<!^)(?=[A-Z])", " ", name)
+    s = re.sub(r"(?<=[a-zA-Z])(?=\d)", " ", s)
+    return s.upper()
 
 
 # ----------------------------------------------------------------------
@@ -523,6 +564,50 @@ def _room_polygon(parts):
     return loop
 
 
+def _door_svg(o, scale, H):
+    """Door leaf + quarter-circle swing arc (the standard plan symbol),
+    radius/width equal to the opening -- drawn in place of a flat rect so
+    a door actually reads as a door."""
+    def sx(gx): return gx * scale
+    def sy(gy): return (H - gy) * scale
+    if o["orient"] == "V":
+        hinge = (sx(o["x1"]), sy(o["y1"]))
+        jamb = (sx(o["x1"]), sy(o["y2"]))
+        d = hinge[1] - jamb[1]
+        tip = (hinge[0] + d, hinge[1])
+    else:
+        hinge = (sx(o["x1"]), sy(o["y1"]))
+        jamb = (sx(o["x2"]), sy(o["y1"]))
+        d = jamb[0] - hinge[0]
+        tip = (hinge[0], hinge[1] + d)
+    path = (f'M {hinge[0]:.1f},{hinge[1]:.1f} L {tip[0]:.1f},{tip[1]:.1f} '
+            f'A {d:.1f},{d:.1f} 0 0,1 {jamb[0]:.1f},{jamb[1]:.1f}')
+    return f'<path d="{path}" fill="none" stroke="{INK}" stroke-width="1.25"/>'
+
+
+def _window_svg(o, scale, H):
+    """Double line across the wall opening -- the standard window symbol."""
+    def sx(gx): return gx * scale
+    def sy(gy): return (H - gy) * scale
+    off = 2.5
+    if o["orient"] == "V":
+        x, y0, y1 = sx(o["x1"]), sy(o["y1"]), sy(o["y2"])
+        coords = [(x - off, y1, x - off, y0), (x + off, y1, x + off, y0)]
+    else:
+        y, x0, x1 = sy(o["y1"]), sx(o["x1"]), sx(o["x2"])
+        coords = [(x0, y - off, x1, y - off), (x0, y + off, x1, y + off)]
+    return [f'<line x1="{a:.1f}" y1="{b:.1f}" x2="{c:.1f}" y2="{d:.1f}" '
+            f'stroke="{ACCENT}" stroke-width="1.5"/>' for a, b, c, d in coords]
+
+
+FILL_BY_KIND = {"living": LIVING, "sleep": SLEEP, "wet": WET, "hall": SHEET}
+
+
+def _room_fill(name):
+    kind = room_kind(name)
+    return "url(#closetHatch)" if kind == "closet" else FILL_BY_KIND[kind]
+
+
 def to_svg(plan, fp: Footprint, scale=14, path="plan.svg", openings=None,
            interior_thickness=0.3, exterior_thickness=0.5):
     """Renders the plan to SVG. If path is None, returns the markup string
@@ -537,21 +622,41 @@ def to_svg(plan, fp: Footprint, scale=14, path="plan.svg", openings=None,
     (L/T/U) rooms are drawn as one merged outline via _room_polygon() and
     skip the thickness inset -- doing both at once would mean insetting
     per polygon edge based on what's across it, which isn't worth the
-    complexity while the seam-merge itself is still new."""
+    complexity while the seam-merge itself is still new.
+
+    Rooms are filled by use (living/sleep/wet/closet-hatch, Hall left
+    neutral) on a 1ft graph-paper grid, doors draw as a swing arc and
+    windows as a double line rather than a flat colored rect."""
     W, H = fp.width, fp.height
     p = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{W*scale+40}" '
          f'height="{H*scale+40}" viewBox="-20 -20 {W*scale+40} {H*scale+40}">',
-         '<rect x="-20" y="-20" width="100%" height="100%" fill="#fbfaf7"/>']
+         f'<defs><pattern id="closetHatch" width="6" height="6" '
+         f'patternTransform="rotate(45)" patternUnits="userSpaceOnUse">'
+         f'<rect width="6" height="6" fill="{SLEEP}"/>'
+         f'<line x1="0" y1="0" x2="0" y2="6" stroke="{INK}" stroke-width="1" opacity="0.25"/>'
+         f'</pattern></defs>',
+         f'<rect x="-20" y="-20" width="100%" height="100%" fill="{SHEET}"/>']
+    for gx in range(W + 1):
+        heavy = gx % 5 == 0
+        p.append(f'<line x1="{gx*scale}" y1="0" x2="{gx*scale}" y2="{H*scale}" '
+                  f'stroke="{GRID}" stroke-width="{1 if heavy else 0.5}" '
+                  f'opacity="{0.55 if heavy else 0.3}"/>')
+    for gy in range(H + 1):
+        heavy = gy % 5 == 0
+        p.append(f'<line x1="0" y1="{gy*scale}" x2="{W*scale}" y2="{gy*scale}" '
+                  f'stroke="{GRID}" stroke-width="{1 if heavy else 0.5}" '
+                  f'opacity="{0.55 if heavy else 0.3}"/>')
     for x1, y1, x2, y2 in fp.voids:
         p.append(f'<rect x="{x1*scale}" y="{(H-y2)*scale}" width="{(x2-x1)*scale}" '
-                 f'height="{(y2-y1)*scale}" fill="#e8e4dc"/>')
+                 f'height="{(y2-y1)*scale}" fill="{GRID}"/>')
     for n, room in plan.items():
         parts = room["parts"]
+        fill = _room_fill(n)
         biggest = max(parts, key=lambda pt: pt["area"])
         if len(parts) > 1:
             poly = _room_polygon(parts)
             pts = " ".join(f"{gx*scale},{(H-gy)*scale}" for gx, gy in poly)
-            p.append(f'<polygon points="{pts}" fill="#fff" stroke="#222" stroke-width="3"/>')
+            p.append(f'<polygon points="{pts}" fill="{fill}" stroke="{INK}" stroke-width="2"/>')
         for part in parts:
             if len(parts) > 1:
                 ix1, ix2, iy1, iy2 = part["x1"], part["x2"], part["y1"], part["y2"]
@@ -563,32 +668,56 @@ def to_svg(plan, fp: Footprint, scale=14, path="plan.svg", openings=None,
                 px, py = ix1 * scale, (H - iy2) * scale
                 pw, ph = (ix2 - ix1) * scale, (iy2 - iy1) * scale
                 p.append(f'<rect x="{px}" y="{py}" width="{pw}" height="{ph}" '
-                         f'fill="#fff" stroke="#222" stroke-width="3"/>')
+                         f'fill="{fill}" stroke="{INK}" stroke-width="2"/>')
             cx, cy = (ix1 + ix2) / 2 * scale, (H - (iy1 + iy2) / 2) * scale
-            dims = f'{part["x2"]-part["x1"]}x{part["y2"]-part["y1"]}'
+            pxw, pxh = (ix2 - ix1) * scale, (iy2 - iy1) * scale
+            w, h = part["x2"] - part["x1"], part["y2"] - part["y1"]
+            dims = f'{w}\'-0" × {h}\'-0"'
             if part is biggest:
-                p.append(f'<text x="{cx}" y="{cy-3}" font-family="Helvetica" '
-                         f'font-size="12" text-anchor="middle" fill="#222">{n}</text>')
-                p.append(f'<text x="{cx}" y="{cy+11}" font-family="Helvetica" '
-                         f'font-size="10" text-anchor="middle" fill="#888">'
-                         f'{dims} / {room["area"]}sf</text>')
-            else:
-                p.append(f'<text x="{cx}" y="{cy+4}" font-family="Helvetica" '
-                         f'font-size="9" text-anchor="middle" fill="#aaa">{dims}</text>')
+                name_label = display_name(n)
+                area_label = f'{room["area"]} SF'
+                if pxw >= 70 and pxh >= 40:
+                    # room's big enough for the full three-line label
+                    max_chars = max(4, int(pxw / 6.8))
+                    if len(name_label) > max_chars:
+                        name_label = name_label[:max_chars - 1].rstrip() + "…"
+                    p.append(f'<text x="{cx}" y="{cy-6}" font-family="{FONT_SANS}" '
+                             f'font-size="11" font-weight="600" letter-spacing="0.5" '
+                             f'text-anchor="middle" fill="{INK}">{name_label}</text>')
+                    p.append(f'<text x="{cx}" y="{cy+8}" font-family="{FONT_MONO}" '
+                             f'font-size="9" text-anchor="middle" fill="{INK}" opacity="0.65">'
+                             f'{dims}</text>')
+                    p.append(f'<text x="{cx}" y="{cy+19}" font-family="{FONT_MONO}" '
+                             f'font-size="9" text-anchor="middle" fill="{INK}" opacity="0.65">'
+                             f'{area_label}</text>')
+                elif pxw >= 38 and pxh >= 24:
+                    # too tight for dims too -- name (truncated if needed) + area only
+                    max_chars = max(3, int(pxw / 5.2))
+                    if len(name_label) > max_chars:
+                        name_label = name_label[:max_chars - 1].rstrip() + "…"
+                    p.append(f'<text x="{cx}" y="{cy-2}" font-family="{FONT_SANS}" '
+                             f'font-size="8" font-weight="600" text-anchor="middle" '
+                             f'fill="{INK}">{name_label}</text>')
+                    p.append(f'<text x="{cx}" y="{cy+8}" font-family="{FONT_MONO}" '
+                             f'font-size="7" text-anchor="middle" fill="{INK}" opacity="0.65">'
+                             f'{area_label}</text>')
+                else:
+                    # too small for a name to ever fit without colliding with
+                    # the neighbors -- area only, full name is in the schedule table
+                    p.append(f'<text x="{cx}" y="{cy+3}" font-family="{FONT_MONO}" '
+                             f'font-size="6.5" text-anchor="middle" fill="{INK}" opacity="0.7">'
+                             f'{area_label}</text>')
+            elif pxw >= 34 and pxh >= 20:
+                p.append(f'<text x="{cx}" y="{cy+4}" font-family="{FONT_MONO}" '
+                         f'font-size="8" text-anchor="middle" fill="{INK}" opacity="0.55">'
+                         f'{dims}</text>')
     p.append(f'<rect x="0" y="0" width="{W*scale}" height="{H*scale}" '
-             f'fill="none" stroke="#222" stroke-width="6"/>')
-    opening_thickness = 4
+             f'fill="none" stroke="{INK}" stroke-width="2"/>')
     for o in openings or []:
-        if o["orient"] == "V":
-            ox = o["x1"] * scale - opening_thickness / 2
-            oy = (H - o["y2"]) * scale
-            ow, oh = opening_thickness, (o["y2"] - o["y1"]) * scale
+        if o["kind"] == "door":
+            p.append(_door_svg(o, scale, H))
         else:
-            ox = o["x1"] * scale
-            oy = (H - o["y1"]) * scale - opening_thickness / 2
-            ow, oh = (o["x2"] - o["x1"]) * scale, opening_thickness
-        color = "#fbfaf7" if o["kind"] == "door" else "#7fb3d5"
-        p.append(f'<rect x="{ox}" y="{oy}" width="{ow}" height="{oh}" fill="{color}"/>')
+            p.extend(_window_svg(o, scale, H))
     p.append("</svg>")
     markup = "\n".join(p)
     if path is None:

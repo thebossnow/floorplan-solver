@@ -20,8 +20,14 @@ from flask import Flask, render_template, request
 
 from generator import (MAX_AREA, MAX_BATHS, MAX_BEDS, MIN_AREA, STYLES,
                         generate_program, shelf_pack_hint, zone_of_program)
-from layout import circulation_ok, place_openings, solve, to_svg
+from layout import FILL_BY_KIND, circulation_ok, display_name, place_openings, room_kind, solve, to_svg
 from zoning import solve_zoned
+
+# schedule-table grouping: closets ride along with the bedroom they belong
+# to, everything else follows to_svg's own room_kind() buckets
+GROUP_BY_KIND = {"living": "Public", "hall": "Public", "sleep": "Private",
+                  "wet": "Service", "closet": "Private"}
+GROUP_ORDER = ["Public", "Private", "Service"]
 
 TIME_LIMIT = 25.0
 ZONE_ROOM_THRESHOLD = 14   # more rooms than this: split into zones instead --
@@ -33,6 +39,20 @@ ZONE_ROOM_THRESHOLD = 14   # more rooms than this: split into zones instead --
 ZONE_TIME_LIMIT = 15.0     # per zone, so a worst-case zoned solve is 2x this
 
 app = Flask(__name__)
+
+
+def _room_rows(plan):
+    rows = []
+    for name, r in plan.items():
+        kind = room_kind(name)
+        swatch = FILL_BY_KIND["sleep"] if kind == "closet" else FILL_BY_KIND[kind]
+        rows.append(dict(
+            name=display_name(name), group=GROUP_BY_KIND[kind], swatch=swatch,
+            area=r["area"], target=r["target"], delta=r["area"] - r["target"],
+        ))
+    order = {g: i for i, g in enumerate(GROUP_ORDER)}
+    rows.sort(key=lambda row: (order[row["group"]], row["name"]))
+    return rows
 
 
 @app.route("/", methods=["GET", "POST"])
@@ -81,6 +101,8 @@ def index():
                 ok, unreachable = circulation_ok(plan, "Entry", private=private)
                 result = dict(
                     svg=svg_markup,
+                    headline=(f'{fp.width} × {fp.height} ft · {fp.area():,} sf · '
+                               f'{form["beds"]} bed / {form["baths"]} bath'),
                     status=status,
                     zoned=zoned,
                     cross=cross,
@@ -89,7 +111,7 @@ def index():
                     total=sum(r["area"] for r in plan.values()),
                     circulation_ok=ok,
                     unreachable=unreachable,
-                    rooms=sorted((n, r["area"], r["target"]) for n, r in plan.items()),
+                    rooms=_room_rows(plan),
                 )
         except ValueError as e:
             error = str(e)
