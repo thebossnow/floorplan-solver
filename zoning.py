@@ -3,24 +3,31 @@ Zone-split/stitch: the real fix for the >15-room slowdown documented in
 README.md (a CP-SAT warm-start hint was tried first -- see
 generator.shelf_pack_hint -- and benchmarked as no help).
 
-Splits a room program into exactly two zones (e.g. public/private wing),
-divides the footprint into two adjacent sub-footprints along one axis
-sized proportionally to each zone's room-area total, and solves each zone
+Splits a room program into 2+ zones (e.g. public/private wing, or public/
+private/garage), divides the footprint into that many adjacent slabs along
+one axis -- ordered alphabetically by zone name, each slab sized
+proportionally to its zone's room-area total -- and solves each zone
 independently with the same exact solve() used everywhere else in this
 project -- so within a zone, every hard constraint (no-overlap, exact
 area, adjacency, daylight, aspect ratio) is still a real guarantee, not a
 heuristic.
 
-What's NOT a hard guarantee: adjacencies that cross the zone boundary.
-Since the two zones are solved independently, there's no way to force a
-room in zone A to land at the exact height along the dividing wall where
-its zone-B neighbor ends up. The best this module can do is anchor both
-rooms in a cross-zone adjacency to the shared wall (via Room.edges) and
+What's NOT a hard guarantee: adjacencies that cross a zone boundary.
+Since zones are solved independently, there's no way to force a room in
+one zone to land at the exact height along the dividing wall where its
+neighbor-zone room ends up. The best this module can do is anchor both
+rooms in a cross-zone adjacency to their shared wall (via Room.edges) and
 then report, after the fact, which cross-zone adjacencies actually ended
 up touching -- the same "solve exactly, then report what didn't work"
 pattern circulation_ok() already uses for reachability. Keep cross-zone
 adjacencies to a small number of "connector" rooms (a Hall linking to a
 bedroom wing, for example) for the best odds of a real doorway.
+
+A cross-zone adjacency only makes physical sense between two zones that
+end up next to each other in the slab ordering -- there's no shared wall
+between the 1st and 3rd of three zones laid out in a row. solve_zoned
+raises ValueError up front if a requested adjacency spans non-adjacent
+zones, rather than silently producing a plan that can't honor it.
 
 That anchor is a hard constraint on top of whatever else the connector
 room already owes (its other adjacencies, aspect ratio, min_dim), and
@@ -36,7 +43,7 @@ cross-zone doorway that anchor was trying to win.
 from dataclasses import replace
 from typing import Dict, Iterable, List, Optional, Tuple
 
-from layout import Room, Adj, Footprint, solve, shared_walls
+from layout import Room, Adj, Footprint, Proximity, solve, shared_walls
 
 
 def solve_zoned(footprint: Footprint,
@@ -48,11 +55,13 @@ def solve_zoned(footprint: Footprint,
                  seed: int = 0,
                  workers: int = 8,
                  hallways: Optional[Iterable[str]] = None,
-                 private: Optional[Iterable[str]] = None):
-    """zone_of: {room_name: zone_name}, exactly two distinct zone names,
-    covering every room in `rooms`. split_axis: "x" splits the footprint
-    into a west zone (alphabetically first zone name) and an east zone;
-    "y" splits into south/north the same way.
+                 private: Optional[Iterable[str]] = None,
+                 weights: Optional[Dict[str, int]] = None,
+                 proximity: Optional[List[Proximity]] = None):
+    """zone_of: {room_name: zone_name}, 2 or more distinct zone names,
+    covering every room in `rooms`. split_axis: "x" lays the zones out
+    west-to-east in alphabetical order of zone name, one slab per zone;
+    "y" lays them out south-to-north the same way.
 
     hallways/private: passed through to each zone's own solve() call (see
     its docstring), filtered down to just the names present in that zone --
@@ -63,12 +72,24 @@ def solve_zoned(footprint: Footprint,
     same limitation as any other cross-zone adjacency -- keep hallway rooms
     and everything that needs them in the same zone.
 
-    Returns (plan, status, cross_report). plan/status match solve()'s
-    return shape (plan is None on failure, status names which zone failed
-    and why). cross_report is None on failure, else
+    weights: solve()'s four *_weight kwargs, splatted into every zone's own
+    solve() call as-is (same weights on every zone). proximity: pairs
+    filtered down to just the ones where both rooms landed in the same
+    zone -- a cross-zone proximity pair can't be scored by either zone's
+    independent solve, so it's silently dropped (not an error, same
+    "best-effort across the zone boundary" spirit as cross_report below).
+
+    Returns (plan, status, cross_report, zone_metrics). plan/status match
+    solve()'s return shape (plan is None on failure, status names which
+    zone failed and why). cross_report is None on failure, else
     {"satisfied": [(a,b), ...], "failed": [(a,b), ...]} for the
     cross-zone adjacencies -- check "failed" before assuming the plan
-    matches the requested program.
+    matches the requested program. zone_metrics is None on failure, else
+    {zone_name: (objective_value, best_objective_bound, wall_time)} from
+    whichever of that zone's solve() calls actually produced its plan (the
+    anchored attempt, or the anchor-free retry if the anchored one failed)
+    -- not aggregated across zones, since each zone's objective is scored
+    independently and summing/comparing them isn't meaningful.
 
     Doesn't support footprint voids yet -- raises ValueError if
     footprint.voids is non-empty."""
@@ -83,44 +104,66 @@ def solve_zoned(footprint: Footprint,
     if missing:
         raise ValueError(f"zone_of is missing rooms: {sorted(missing)}")
     zones = sorted(set(zone_of[n] for n in names))
-    if len(zones) != 2:
-        raise ValueError(f"solve_zoned needs exactly 2 zones, got {zones}")
-    zone_a, zone_b = zones
+    if len(zones) < 2:
+        raise ValueError(f"solve_zoned needs at least 2 zones, got {zones}")
+    zone_index = {z: i for i, z in enumerate(zones)}
 
-    rooms_by_zone = {zone_a: [], zone_b: []}
+    rooms_by_zone = {z: [] for z in zones}
     for r in rooms:
         rooms_by_zone[zone_of[r.name]].append(r)
-    if not rooms_by_zone[zone_a] or not rooms_by_zone[zone_b]:
-        raise ValueError(f"both zones need at least one room ({zone_a}, {zone_b})")
+    empty = [z for z in zones if not rooms_by_zone[z]]
+    if empty:
+        raise ValueError(f"every zone needs at least one room (empty: {empty})")
 
     intra = [ad for ad in adjacencies if zone_of[ad.a] == zone_of[ad.b]]
     cross = [ad for ad in adjacencies if zone_of[ad.a] != zone_of[ad.b]]
+    intra_by_zone = {z: [ad for ad in intra if zone_of[ad.a] == z] for z in zones}
+
+    # group cross adjacencies by which dividing wall they'd need to share --
+    # wall i sits between zones[i] and zones[i+1]. An adjacency between
+    # non-neighboring zones has no wall to anchor to under this linear slab
+    # layout, so fail fast instead of silently dropping it.
+    cross_by_wall: Dict[int, List[Adj]] = {}
+    for ad in cross:
+        ia, ib = zone_index[zone_of[ad.a]], zone_index[zone_of[ad.b]]
+        if abs(ia - ib) != 1:
+            raise ValueError(
+                f"cross-zone adjacency {ad.a!r}-{ad.b!r} spans non-adjacent "
+                f"zones {zone_of[ad.a]!r}/{zone_of[ad.b]!r} (zone order: "
+                f"{zones}); only neighboring zones in the split order share a wall")
+        cross_by_wall.setdefault(min(ia, ib), []).append(ad)
 
     # anchor every room that participates in a cross-zone adjacency to the
-    # side of its own zone that faces the dividing wall (which wall) *and*
-    # pin it to a shared coordinate band on that wall (where on it) -- an
-    # edge anchor alone only guarantees the two rooms are somewhere on the
-    # same line, not that their extents actually overlap, since each zone
-    # is solved with no visibility into where the other placed its room.
-    # Each cross adjacency gets its own non-overlapping band, sized to its
-    # own min_shared, spread evenly along the shared wall so two different
-    # connector pairs on the same side don't get pinned on top of each other.
+    # side of its own zone that faces the relevant dividing wall (which
+    # wall) *and* pin it to a shared coordinate band on that wall (where on
+    # it) -- an edge anchor alone only guarantees the two rooms are
+    # somewhere on the same line, not that their extents actually overlap,
+    # since each zone is solved with no visibility into where the other
+    # placed its room. Each cross adjacency on a given wall gets its own
+    # non-overlapping band, sized to its own min_shared, spread evenly
+    # along that wall so two different connector pairs on the same wall
+    # don't get pinned on top of each other. A room with cross adjacencies
+    # on two different walls (possible for a middle zone with 3+ zones)
+    # only keeps the last-processed anchor -- same "best effort" spirit as
+    # everything else here; if that costs it feasibility, the per-zone
+    # anchor-free retry below still gives it a real plan.
     perp_dim = footprint.height if split_axis == "x" else footprint.width
     anchor_edge, must_cover = {}, {}
-    n = len(cross)
-    for i, ad in enumerate(cross):
-        slot = perp_dim / n
-        width = max(ad.min_shared, min(ad.min_shared + 2, slot - 2))
-        center = slot * (i + 0.5)
-        band_lo = max(0, round(center - width / 2))
-        band_hi = min(perp_dim, band_lo + round(width))
-        for name in (ad.a, ad.b):
-            z = zone_of[name]
-            if split_axis == "x":
-                anchor_edge[name] = "E" if z == zone_a else "W"
-            else:
-                anchor_edge[name] = "N" if z == zone_a else "S"
-            must_cover[name] = band_lo, band_hi
+    for wall_i, group in cross_by_wall.items():
+        n = len(group)
+        for i, ad in enumerate(group):
+            slot = perp_dim / n
+            width = max(ad.min_shared, min(ad.min_shared + 2, slot - 2))
+            center = slot * (i + 0.5)
+            band_lo = max(0, round(center - width / 2))
+            band_hi = min(perp_dim, band_lo + round(width))
+            for name in (ad.a, ad.b):
+                zi = zone_index[zone_of[name]]
+                if split_axis == "x":
+                    anchor_edge[name] = "E" if zi == wall_i else "W"
+                else:
+                    anchor_edge[name] = "N" if zi == wall_i else "S"
+                must_cover[name] = band_lo, band_hi
 
     cover_axis = "y" if split_axis == "x" else "x"
 
@@ -135,52 +178,74 @@ def solve_zoned(footprint: Footprint,
             out.append(r)
         return out
 
+    # N-way slab split along the chosen axis, ordered by `zones`, each
+    # slab sized proportionally to its zone's room-area total (the same
+    # rounding pattern as generator._fit_targets: floor every slab at 1,
+    # then dump the rounding remainder onto the biggest slab so widths
+    # always sum to exactly `dim`).
     dim = footprint.width if split_axis == "x" else footprint.height
-    sum_a = sum(r.target_area for r in rooms_by_zone[zone_a])
-    sum_b = sum(r.target_area for r in rooms_by_zone[zone_b])
-    split_at = max(1, min(round(dim * sum_a / (sum_a + sum_b)), dim - 1))
+    if dim < len(zones):
+        raise ValueError(
+            f"footprint too small ({dim} along {split_axis!r}) to split "
+            f"into {len(zones)} zones -- need at least 1 unit per zone")
+    zone_sum = {z: sum(r.target_area for r in rooms_by_zone[z]) for z in zones}
+    total_sum = sum(zone_sum.values())
+    slab = {z: max(1, round(dim * zone_sum[z] / total_sum)) for z in zones}
+    drift = dim - sum(slab.values())
+    if drift:
+        biggest = max(zones, key=lambda z: slab[z])
+        slab[biggest] += drift
+    if any(w < 1 for w in slab.values()):
+        raise ValueError(
+            f"footprint too small ({dim} along {split_axis!r}) to fit "
+            f"{len(zones)} zones proportionally to their room areas")
 
-    if split_axis == "x":
-        fp_a = Footprint(width=split_at, height=footprint.height)
-        fp_b = Footprint(width=footprint.width - split_at, height=footprint.height)
-        origin_a, origin_b = (0, 0), (split_at, 0)
-    else:
-        fp_a = Footprint(width=footprint.width, height=split_at)
-        fp_b = Footprint(width=footprint.width, height=footprint.height - split_at)
-        origin_a, origin_b = (0, 0), (0, split_at)
+    offset, cum = {}, 0
+    for z in zones:
+        offset[z] = cum
+        cum += slab[z]
 
-    intra_a = [ad for ad in intra if zone_of[ad.a] == zone_a]
-    intra_b = [ad for ad in intra if zone_of[ad.a] == zone_b]
+    fp_by_zone, origin_by_zone = {}, {}
+    for z in zones:
+        if split_axis == "x":
+            fp_by_zone[z] = Footprint(width=slab[z], height=footprint.height)
+            origin_by_zone[z] = (offset[z], 0)
+        else:
+            fp_by_zone[z] = Footprint(width=footprint.width, height=slab[z])
+            origin_by_zone[z] = (0, offset[z])
 
     all_hallways = set(hallways or ())
     all_private = set(private or ())
+    all_proximity = list(proximity or ())
+    weights = weights or {}
 
     def solve_zone(fp_zone, zone_rooms, zone_adj):
-        # solve() also returns (objective_value, best_objective_bound,
-        # wall_time) per zone now -- not surfaced through solve_zoned()'s own
-        # return yet (unchanged 3-tuple below), discarded here for now.
         zone_names = {r.name for r in zone_rooms}
         zone_hallways = all_hallways & zone_names
         zone_private = all_private & zone_names
-        plan, status, _, _, _ = solve(fp_zone, anchored(zone_rooms), zone_adj,
-                                       time_limit=time_limit, seed=seed, workers=workers,
-                                       hallways=zone_hallways, private=zone_private)
+        zone_proximity = [pr for pr in all_proximity if pr.a in zone_names and pr.b in zone_names]
+        plan, status, objective_value, best_objective_bound, wall_time = solve(
+            fp_zone, anchored(zone_rooms), zone_adj,
+            time_limit=time_limit, seed=seed, workers=workers,
+            hallways=zone_hallways, private=zone_private,
+            proximity=zone_proximity, **weights)
         if plan:
-            return plan, status
+            return plan, status, (objective_value, best_objective_bound, wall_time)
         # the cross-zone anchor(s) may be what made this infeasible -- retry
         # without them rather than failing a zone that's solvable on its own
-        plan, status, _, _, _ = solve(fp_zone, zone_rooms, zone_adj,
-                                       time_limit=time_limit, seed=seed, workers=workers,
-                                       hallways=zone_hallways, private=zone_private)
-        return plan, status
+        plan, status, objective_value, best_objective_bound, wall_time = solve(
+            fp_zone, zone_rooms, zone_adj,
+            time_limit=time_limit, seed=seed, workers=workers,
+            hallways=zone_hallways, private=zone_private,
+            proximity=zone_proximity, **weights)
+        return plan, status, (objective_value, best_objective_bound, wall_time)
 
-    plan_a, status_a = solve_zone(fp_a, rooms_by_zone[zone_a], intra_a)
-    if not plan_a:
-        return None, f"zone {zone_a!r} failed: {status_a}", None
-
-    plan_b, status_b = solve_zone(fp_b, rooms_by_zone[zone_b], intra_b)
-    if not plan_b:
-        return None, f"zone {zone_b!r} failed: {status_b}", None
+    plans, statuses, zone_metrics = {}, {}, {}
+    for z in zones:
+        plan_z, status_z, metrics_z = solve_zone(fp_by_zone[z], rooms_by_zone[z], intra_by_zone[z])
+        if not plan_z:
+            return None, f"zone {z!r} failed: {status_z}", None, None
+        plans[z], statuses[z], zone_metrics[z] = plan_z, status_z, metrics_z
 
     def translate(plan, dx, dy):
         out = {}
@@ -191,7 +256,9 @@ def solve_zoned(footprint: Footprint,
             out[name] = dict(parts=parts, area=room["area"], target=room["target"])
         return out
 
-    merged = {**translate(plan_a, *origin_a), **translate(plan_b, *origin_b)}
+    merged = {}
+    for z in zones:
+        merged.update(translate(plans[z], *origin_by_zone[z]))
 
     wall_len = {frozenset((a, b)): length for a, b, _, length in shared_walls(merged, min_len=1)}
     satisfied, failed = [], []
@@ -201,5 +268,5 @@ def solve_zoned(footprint: Footprint,
         else:
             failed.append((ad.a, ad.b))
 
-    status = f"zone {zone_a!r}: {status_a}, zone {zone_b!r}: {status_b}"
-    return merged, status, dict(satisfied=satisfied, failed=failed)
+    status = ", ".join(f"zone {z!r}: {statuses[z]}" for z in zones)
+    return merged, status, dict(satisfied=satisfied, failed=failed), zone_metrics

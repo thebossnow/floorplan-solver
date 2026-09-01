@@ -48,6 +48,21 @@
   input:focus, select:focus, button:focus-visible {
     outline: 2px solid var(--ink); outline-offset: 1px;
   }
+
+  .label-row { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 5px; }
+  .label-row label { margin-bottom: 0; }
+  .area-value { font-family: 'IBM Plex Mono', monospace; font-size: 13px; font-weight: 500;
+                color: var(--ink); }
+  input[type="range"] { -webkit-appearance: none; appearance: none; width: 100%; height: 4px;
+                         border-radius: 2px; background: var(--grid); border: none; padding: 0;
+                         margin: 10px 0 4px; }
+  input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none;
+    width: 18px; height: 18px; border-radius: 50%; background: var(--accent); cursor: pointer;
+    border: 2px solid #fdf9f0; box-shadow: 0 0 0 1px var(--accent); }
+  input[type="range"]::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%;
+    background: var(--accent); cursor: pointer; border: 2px solid #fdf9f0;
+    box-shadow: 0 0 0 1px var(--accent); }
+  input[type="range"]:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
   button { padding: 12px; font-size: 14px; font-weight: 600;
            font-family: inherit; background: var(--accent); color: #fdf9f0; border: none;
            border-radius: 7px; cursor: pointer; transition: transform 150ms, background 150ms; }
@@ -71,10 +86,21 @@
   svg g[data-room].room-hover > rect,
   svg g[data-room].room-hover > polygon { stroke: var(--accent); stroke-width: 3; }
 
+  /* pan/zoom: the wrapper clips, the svg itself just changes viewBox --
+     touch-action: none stops the browser's own scroll/pinch from fighting
+     our own touch handlers */
+  .drawing-wrap { touch-action: none; overflow: hidden; border-radius: 8px; }
+  .drawing-wrap svg { display: block; touch-action: none; cursor: grab; }
+  .drawing-wrap svg.panning { cursor: grabbing; }
+  .drawing-controls { display: flex; justify-content: space-between; align-items: center;
+                       gap: 10px; margin-top: 10px; }
+  .drawing-controls-buttons { display: flex; gap: 8px; }
+  .zoom-hint { font-size: 12px; color: var(--ink-soft); }
+
   /* stepper (beds/baths) */
   .stepper { display: flex; align-items: stretch; border: 1px solid var(--grid);
              border-radius: 6px; overflow: hidden; background: #fff; }
-  .stepper button { flex: 0 0 40px; min-height: 40px; padding: 0; border: none;
+  .stepper button { flex: 0 0 44px; min-height: 44px; padding: 0; border: none;
                      background: var(--sheet-2); font-size: 17px; font-weight: 600;
                      color: var(--ink); border-radius: 0; }
   .stepper button:hover { background: var(--grid); }
@@ -93,6 +119,16 @@
                        transition: border-color 150ms, background 150ms; }
   .chip-group input:checked + label { border-color: var(--accent); background: #f6e9e4; }
   .chip-group input:focus-visible + label { outline: 2px solid var(--ink); outline-offset: 1px; }
+
+  /* quick-start presets on the empty state */
+  .presets { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+  .presets-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+                    color: var(--ink-soft); }
+  .preset-chip { padding: 7px 11px; font-size: 12px; font-weight: 500; background: #fff;
+                 color: var(--ink); border: 1px solid var(--grid); border-radius: 7px;
+                 cursor: pointer; }
+  .preset-chip:hover { background: var(--sheet-2); border-color: var(--ink-soft); }
+  .preset-chip:active { transform: scale(0.98); }
   .shape-icon { display: inline-block; border: 2px solid currentColor; border-radius: 2px;
                 flex-shrink: 0; }
   .shape-icon.rect { width: 22px; height: 14px; }
@@ -149,12 +185,15 @@
 <h1>Floor Plan Solver</h1>
 <p class="sub">Give it a foundation and a program, and it tiles every room to the inch — no gaps, no overlaps, doors and windows placed where the walls actually allow them.</p>
 
-<div class="layout {{ 'has-result' if result }}">
+<div class="layout {{ 'has-result' if (result or sample_svg) }}">
   <div class="spec-col">
     <form method="post" id="plan-form">
       <div>
-        <label for="area">Foundation area (sq ft)</label>
-        <input type="number" id="area" name="area" min="{{ min_area }}" max="{{ max_area }}"
+        <div class="label-row">
+          <label for="area">Foundation area</label>
+          <span class="area-value" id="area-value">{{ "{:,}".format(form.area) }} sf</span>
+        </div>
+        <input type="range" id="area" name="area" min="{{ min_area }}" max="{{ max_area }}" step="50"
                value="{{ form.area }}" required>
       </div>
       <div>
@@ -198,6 +237,16 @@
       <p class="hint">Usually takes 10–25 seconds.</p>
     </form>
 
+    {% if not result %}
+    <div class="presets">
+      <span class="presets-label">Try:</span>
+      {% for p in presets %}
+      <button type="button" class="preset-chip" data-area="{{ p.area }}" data-beds="{{ p.beds }}"
+              data-baths="{{ p.baths }}" data-shape="{{ p.shape }}" data-style="{{ p.style }}">{{ p.label }}</button>
+      {% endfor %}
+    </div>
+    {% endif %}
+
     {% if error %}
     <div class="error">{{ error }}</div>
     {% endif %}
@@ -224,7 +273,16 @@
       {% endif %}
     </div>
 
-    {{ result.svg | safe }}
+    <div class="drawing-wrap">{{ result.svg | safe }}</div>
+
+    <div class="drawing-controls">
+      <span class="zoom-hint">Drag to pan · scroll or pinch to zoom</span>
+      <div class="drawing-controls-buttons">
+        <button type="button" class="download-btn" id="copy-link"
+                data-share-url="{{ url_for('index', area=form.area, beds=form.beds, baths=form.baths, shape=form.shape, style=form.style, _external=True) }}">Copy link</button>
+        <button type="button" class="download-btn" id="reset-view">Reset view</button>
+      </div>
+    </div>
 
     <button type="button" class="download-btn" id="download-svg">Download sheet</button>
 
@@ -237,6 +295,12 @@
         <span>Total area <b>{{ result.total }} sf</b></span>
       </div>
     </details>
+  </div>
+  {% elif sample_svg %}
+  <div class="drawing-col">
+    <div class="headline"><span class="num">{{ sample_caption }}</span></div>
+    <div class="drawing-wrap">{{ sample_svg | safe }}</div>
+    <p class="hint">This is a cached example. Fill in the form and click "Draw this house" to generate your own.</p>
   </div>
   {% endif %}
 </div>
@@ -280,6 +344,24 @@
     });
   });
 
+  var areaInput = document.getElementById('area');
+  var areaValue = document.getElementById('area-value');
+  function updateAreaLabel() {
+    if (areaInput && areaValue) areaValue.textContent = Number(areaInput.value).toLocaleString() + ' sf';
+  }
+  if (areaInput) areaInput.addEventListener('input', updateAreaLabel);
+
+  document.querySelectorAll('.preset-chip').forEach(function (chip) {
+    chip.addEventListener('click', function () {
+      areaInput.value = chip.dataset.area;
+      updateAreaLabel();
+      document.getElementById('beds').value = chip.dataset.beds;
+      document.getElementById('baths').value = chip.dataset.baths;
+      document.getElementById('shape-' + chip.dataset.shape).checked = true;
+      document.getElementById('style-' + chip.dataset.style).checked = true;
+    });
+  });
+
   document.querySelectorAll('[data-room]').forEach(function (el) {
     el.addEventListener('mouseenter', function () {
       document.querySelectorAll('[data-room="' + CSS.escape(el.dataset.room) + '"]')
@@ -291,12 +373,160 @@
     });
   });
 
+  // pan/zoom: rewrite the svg's own viewBox rather than a CSS transform, so
+  // stroke widths and text stay crisp at every zoom level. Base viewBox
+  // (the fit-to-container framing to_svg() renders) is read once and used
+  // both as the zoomed-out floor and as the pan-clamp bounds.
+  var drawingWrap = document.querySelector('.drawing-wrap');
+  var planSvg = drawingWrap && drawingWrap.querySelector('svg');
+  var view = null, base = null;
+
+  if (planSvg) {
+    var vb = planSvg.getAttribute('viewBox').split(/\s+/).map(Number);
+    base = { x: vb[0], y: vb[1], w: vb[2], h: vb[3] };
+    view = { x: base.x, y: base.y, w: base.w, h: base.h };
+  }
+
+  var MIN_SCALE = 1, MAX_SCALE = 8;
+
+  function applyView() {
+    planSvg.setAttribute('viewBox', view.x + ' ' + view.y + ' ' + view.w + ' ' + view.h);
+  }
+
+  function clampPan() {
+    var minX = base.x, maxX = base.x + base.w - view.w;
+    view.x = Math.min(Math.max(view.x, minX), Math.max(minX, maxX));
+    var minY = base.y, maxY = base.y + base.h - view.h;
+    view.y = Math.min(Math.max(view.y, minY), Math.max(minY, maxY));
+  }
+
+  function screenToSvg(clientX, clientY) {
+    var rect = planSvg.getBoundingClientRect();
+    var px = (clientX - rect.left) / rect.width;
+    var py = (clientY - rect.top) / rect.height;
+    return { x: view.x + px * view.w, y: view.y + py * view.h };
+  }
+
+  function zoomAt(clientX, clientY, factor) {
+    var pt = screenToSvg(clientX, clientY);
+    var newW = view.w / factor, newH = view.h / factor;
+    var scale = base.w / newW;
+    if (scale < MIN_SCALE) { newW = base.w; newH = base.h; }
+    if (scale > MAX_SCALE) { newW = base.w / MAX_SCALE; newH = base.h / MAX_SCALE; }
+    var px = (pt.x - view.x) / view.w, py = (pt.y - view.y) / view.h;
+    view.w = newW; view.h = newH;
+    view.x = pt.x - px * view.w;
+    view.y = pt.y - py * view.h;
+    clampPan();
+    applyView();
+  }
+
+  function panBy(dxPixels, dyPixels) {
+    var rect = planSvg.getBoundingClientRect();
+    view.x -= dxPixels / rect.width * view.w;
+    view.y -= dyPixels / rect.height * view.h;
+    clampPan();
+    applyView();
+  }
+
+  function touchDist(touches) {
+    var dx = touches[0].clientX - touches[1].clientX;
+    var dy = touches[0].clientY - touches[1].clientY;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+  function touchMid(touches) {
+    return { x: (touches[0].clientX + touches[1].clientX) / 2,
+             y: (touches[0].clientY + touches[1].clientY) / 2 };
+  }
+
+  if (planSvg) {
+    planSvg.addEventListener('wheel', function (e) {
+      e.preventDefault();
+      zoomAt(e.clientX, e.clientY, e.deltaY < 0 ? 1.15 : 1 / 1.15);
+    }, { passive: false });
+
+    var dragging = false, lastX = 0, lastY = 0;
+    planSvg.addEventListener('mousedown', function (e) {
+      e.preventDefault(); // avoid native text selection while dragging over room labels
+      dragging = true; lastX = e.clientX; lastY = e.clientY;
+      planSvg.classList.add('panning');
+    });
+    window.addEventListener('mousemove', function (e) {
+      if (!dragging) return;
+      panBy(e.clientX - lastX, e.clientY - lastY);
+      lastX = e.clientX; lastY = e.clientY;
+    });
+    window.addEventListener('mouseup', function () {
+      dragging = false;
+      planSvg.classList.remove('panning');
+    });
+
+    var touchState = null;
+    planSvg.addEventListener('touchstart', function (e) {
+      if (e.touches.length === 1) {
+        touchState = { mode: 'pan', x: e.touches[0].clientX, y: e.touches[0].clientY };
+      } else if (e.touches.length === 2) {
+        touchState = { mode: 'pinch', dist: touchDist(e.touches) };
+      }
+    }, { passive: true });
+
+    planSvg.addEventListener('touchmove', function (e) {
+      if (!touchState) return;
+      e.preventDefault();
+      if (touchState.mode === 'pan' && e.touches.length === 1) {
+        var t = e.touches[0];
+        panBy(t.clientX - touchState.x, t.clientY - touchState.y);
+        touchState.x = t.clientX; touchState.y = t.clientY;
+      } else if (touchState.mode === 'pinch' && e.touches.length === 2) {
+        var newDist = touchDist(e.touches);
+        var mid = touchMid(e.touches);
+        zoomAt(mid.x, mid.y, newDist / touchState.dist);
+        touchState.dist = newDist;
+      }
+    }, { passive: false });
+
+    planSvg.addEventListener('touchend', function (e) {
+      if (e.touches.length === 0) touchState = null;
+      else if (e.touches.length === 1) {
+        touchState = { mode: 'pan', x: e.touches[0].clientX, y: e.touches[0].clientY };
+      }
+    }, { passive: true });
+  }
+
+  var resetViewBtn = document.getElementById('reset-view');
+  if (resetViewBtn) {
+    resetViewBtn.addEventListener('click', function () {
+      view = { x: base.x, y: base.y, w: base.w, h: base.h };
+      applyView();
+    });
+  }
+
+  var copyLinkBtn = document.getElementById('copy-link');
+  if (copyLinkBtn) {
+    copyLinkBtn.addEventListener('click', function () {
+      var url = copyLinkBtn.dataset.shareUrl;
+      var original = copyLinkBtn.textContent;
+      navigator.clipboard.writeText(url).then(function () {
+        copyLinkBtn.textContent = 'Copied!';
+        setTimeout(function () { copyLinkBtn.textContent = original; }, 1500);
+      }, function () {
+        copyLinkBtn.textContent = 'Copy failed';
+        setTimeout(function () { copyLinkBtn.textContent = original; }, 1500);
+      });
+    });
+  }
+
   var downloadBtn = document.getElementById('download-svg');
   if (downloadBtn) {
     downloadBtn.addEventListener('click', function () {
       var svg = document.querySelector('.drawing-col svg');
       if (!svg) return;
+      // serialize the full fit-to-page framing, not whatever's currently
+      // panned/zoomed into view
+      var liveViewBox = svg.getAttribute('viewBox');
+      if (base) svg.setAttribute('viewBox', base.x + ' ' + base.y + ' ' + base.w + ' ' + base.h);
       var source = '<?xml version="1.0" standalone="no"?>\r\n' + new XMLSerializer().serializeToString(svg);
+      if (base) svg.setAttribute('viewBox', liveViewBox);
       var blob = new Blob([source], {type: 'image/svg+xml;charset=utf-8'});
       var url = URL.createObjectURL(blob);
       var a = document.createElement('a');

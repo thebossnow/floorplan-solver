@@ -1,0 +1,213 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="698" height="603" viewBox="-34 -48 698 603">
+<defs><pattern id="closetHatch" width="6" height="6" patternTransform="rotate(45)" patternUnits="userSpaceOnUse"><rect width="6" height="6" fill="#C9D4C2"/><line x1="0" y1="0" x2="0" y2="6" stroke="#1C1915" stroke-width="1" opacity="0.25"/></pattern></defs>
+<rect x="-34" y="-48" width="100%" height="100%" fill="#EDE6D6"/>
+<line x1="0" y1="0" x2="0" y2="462" stroke="#D9D0BE" stroke-width="1" opacity="0.55"/>
+<line x1="14" y1="0" x2="14" y2="462" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="28" y1="0" x2="28" y2="462" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="42" y1="0" x2="42" y2="462" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="56" y1="0" x2="56" y2="462" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="70" y1="0" x2="70" y2="462" stroke="#D9D0BE" stroke-width="1" opacity="0.55"/>
+<line x1="84" y1="0" x2="84" y2="462" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="98" y1="0" x2="98" y2="462" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="112" y1="0" x2="112" y2="462" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="126" y1="0" x2="126" y2="462" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="140" y1="0" x2="140" y2="462" stroke="#D9D0BE" stroke-width="1" opacity="0.55"/>
+<line x1="154" y1="0" x2="154" y2="462" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="168" y1="0" x2="168" y2="462" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="182" y1="0" x2="182" y2="462" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="196" y1="0" x2="196" y2="462" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="210" y1="0" x2="210" y2="462" stroke="#D9D0BE" stroke-width="1" opacity="0.55"/>
+<line x1="224" y1="0" x2="224" y2="462" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="238" y1="0" x2="238" y2="462" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="252" y1="0" x2="252" y2="462" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="266" y1="0" x2="266" y2="462" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="280" y1="0" x2="280" y2="462" stroke="#D9D0BE" stroke-width="1" opacity="0.55"/>
+<line x1="294" y1="0" x2="294" y2="462" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="308" y1="0" x2="308" y2="462" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="322" y1="0" x2="322" y2="462" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="336" y1="0" x2="336" y2="462" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="350" y1="0" x2="350" y2="462" stroke="#D9D0BE" stroke-width="1" opacity="0.55"/>
+<line x1="364" y1="0" x2="364" y2="462" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="378" y1="0" x2="378" y2="462" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="392" y1="0" x2="392" y2="462" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="406" y1="0" x2="406" y2="462" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="420" y1="0" x2="420" y2="462" stroke="#D9D0BE" stroke-width="1" opacity="0.55"/>
+<line x1="434" y1="0" x2="434" y2="462" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="448" y1="0" x2="448" y2="462" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="462" y1="0" x2="462" y2="462" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="476" y1="0" x2="476" y2="462" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="490" y1="0" x2="490" y2="462" stroke="#D9D0BE" stroke-width="1" opacity="0.55"/>
+<line x1="504" y1="0" x2="504" y2="462" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="518" y1="0" x2="518" y2="462" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="532" y1="0" x2="532" y2="462" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="546" y1="0" x2="546" y2="462" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="560" y1="0" x2="560" y2="462" stroke="#D9D0BE" stroke-width="1" opacity="0.55"/>
+<line x1="574" y1="0" x2="574" y2="462" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="588" y1="0" x2="588" y2="462" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="602" y1="0" x2="602" y2="462" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="616" y1="0" x2="616" y2="462" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="630" y1="0" x2="630" y2="462" stroke="#D9D0BE" stroke-width="1" opacity="0.55"/>
+<line x1="644" y1="0" x2="644" y2="462" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="0" y1="0" x2="644" y2="0" stroke="#D9D0BE" stroke-width="1" opacity="0.55"/>
+<line x1="0" y1="14" x2="644" y2="14" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="0" y1="28" x2="644" y2="28" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="0" y1="42" x2="644" y2="42" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="0" y1="56" x2="644" y2="56" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="0" y1="70" x2="644" y2="70" stroke="#D9D0BE" stroke-width="1" opacity="0.55"/>
+<line x1="0" y1="84" x2="644" y2="84" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="0" y1="98" x2="644" y2="98" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="0" y1="112" x2="644" y2="112" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="0" y1="126" x2="644" y2="126" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="0" y1="140" x2="644" y2="140" stroke="#D9D0BE" stroke-width="1" opacity="0.55"/>
+<line x1="0" y1="154" x2="644" y2="154" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="0" y1="168" x2="644" y2="168" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="0" y1="182" x2="644" y2="182" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="0" y1="196" x2="644" y2="196" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="0" y1="210" x2="644" y2="210" stroke="#D9D0BE" stroke-width="1" opacity="0.55"/>
+<line x1="0" y1="224" x2="644" y2="224" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="0" y1="238" x2="644" y2="238" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="0" y1="252" x2="644" y2="252" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="0" y1="266" x2="644" y2="266" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="0" y1="280" x2="644" y2="280" stroke="#D9D0BE" stroke-width="1" opacity="0.55"/>
+<line x1="0" y1="294" x2="644" y2="294" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="0" y1="308" x2="644" y2="308" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="0" y1="322" x2="644" y2="322" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="0" y1="336" x2="644" y2="336" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="0" y1="350" x2="644" y2="350" stroke="#D9D0BE" stroke-width="1" opacity="0.55"/>
+<line x1="0" y1="364" x2="644" y2="364" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="0" y1="378" x2="644" y2="378" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="0" y1="392" x2="644" y2="392" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="0" y1="406" x2="644" y2="406" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="0" y1="420" x2="644" y2="420" stroke="#D9D0BE" stroke-width="1" opacity="0.55"/>
+<line x1="0" y1="434" x2="644" y2="434" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="0" y1="448" x2="644" y2="448" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<line x1="0" y1="462" x2="644" y2="462" stroke="#D9D0BE" stroke-width="0.5" opacity="0.3"/>
+<g data-room="Entry">
+<rect x="7.0" y="380.09999999999997" width="116.89999999999999" height="74.89999999999999" fill="#E4C9A0" stroke="#1C1915" stroke-width="2"/>
+<text x="65.45" y="411.55" font-family="'IBM Plex Sans', Arial, sans-serif" font-size="11" font-weight="600" letter-spacing="0.5" text-anchor="middle" fill="#1C1915">ENTRY</text>
+<text x="65.45" y="425.55" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="9" text-anchor="middle" fill="#1C1915" opacity="0.65">9'-0" × 6'-0"</text>
+<text x="65.45" y="436.55" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="9" text-anchor="middle" fill="#1C1915" opacity="0.65">54 SF</text>
+</g>
+<g data-room="Living">
+<rect x="128.1" y="240.09999999999997" width="247.80000000000004" height="214.9" fill="#E4C9A0" stroke="#1C1915" stroke-width="2"/>
+<text x="252.0" y="341.55" font-family="'IBM Plex Sans', Arial, sans-serif" font-size="11" font-weight="600" letter-spacing="0.5" text-anchor="middle" fill="#1C1915">LIVING</text>
+<text x="252.0" y="355.55" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="9" text-anchor="middle" fill="#1C1915" opacity="0.65">18'-0" × 16'-0"</text>
+<text x="252.0" y="366.55" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="9" text-anchor="middle" fill="#1C1915" opacity="0.65">288 SF</text>
+</g>
+<g data-room="Kitchen">
+<rect x="380.09999999999997" y="170.09999999999997" width="256.90000000000003" height="135.8" fill="#E4C9A0" stroke="#1C1915" stroke-width="2"/>
+<text x="508.55000000000007" y="232.0" font-family="'IBM Plex Sans', Arial, sans-serif" font-size="11" font-weight="600" letter-spacing="0.5" text-anchor="middle" fill="#1C1915">KITCHEN</text>
+<text x="508.55000000000007" y="246.0" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="9" text-anchor="middle" fill="#1C1915" opacity="0.65">19'-0" × 10'-0"</text>
+<text x="508.55000000000007" y="257.0" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="9" text-anchor="middle" fill="#1C1915" opacity="0.65">190 SF</text>
+</g>
+<g data-room="Dining">
+<rect x="380.09999999999997" y="310.09999999999997" width="177.80000000000004" height="144.9" fill="#E4C9A0" stroke="#1C1915" stroke-width="2"/>
+<text x="469.0" y="376.55" font-family="'IBM Plex Sans', Arial, sans-serif" font-size="11" font-weight="600" letter-spacing="0.5" text-anchor="middle" fill="#1C1915">DINING</text>
+<text x="469.0" y="390.55" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="9" text-anchor="middle" fill="#1C1915" opacity="0.65">13'-0" × 11'-0"</text>
+<text x="469.0" y="401.55" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="9" text-anchor="middle" fill="#1C1915" opacity="0.65">143 SF</text>
+</g>
+<g data-room="Hall">
+<rect x="128.1" y="170.09999999999997" width="191.8" height="65.80000000000004" fill="#EDE6D6" stroke="#1C1915" stroke-width="2"/>
+<text x="224.0" y="197.0" font-family="'IBM Plex Sans', Arial, sans-serif" font-size="11" font-weight="600" letter-spacing="0.5" text-anchor="middle" fill="#1C1915">HALL</text>
+<text x="224.0" y="211.0" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="9" text-anchor="middle" fill="#1C1915" opacity="0.65">14'-0" × 5'-0"</text>
+<text x="224.0" y="222.0" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="9" text-anchor="middle" fill="#1C1915" opacity="0.65">70 SF</text>
+</g>
+<g data-room="Utility">
+<rect x="562.1" y="310.09999999999997" width="74.90000000000002" height="144.9" fill="#B7C9C8" stroke="#1C1915" stroke-width="2"/>
+<text x="599.5500000000001" y="376.55" font-family="'IBM Plex Sans', Arial, sans-serif" font-size="11" font-weight="600" letter-spacing="0.5" text-anchor="middle" fill="#1C1915">UTILITY</text>
+<text x="599.5500000000001" y="390.55" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="9" text-anchor="middle" fill="#1C1915" opacity="0.65">6'-0" × 11'-0"</text>
+<text x="599.5500000000001" y="401.55" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="9" text-anchor="middle" fill="#1C1915" opacity="0.65">66 SF</text>
+</g>
+<g data-room="Primary">
+<rect x="282.09999999999997" y="7.0" width="247.80000000000004" height="158.90000000000003" fill="#C9D4C2" stroke="#1C1915" stroke-width="2"/>
+<text x="406.0" y="80.45000000000002" font-family="'IBM Plex Sans', Arial, sans-serif" font-size="11" font-weight="600" letter-spacing="0.5" text-anchor="middle" fill="#1C1915">PRIMARY</text>
+<text x="406.0" y="94.45000000000002" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="9" text-anchor="middle" fill="#1C1915" opacity="0.65">18'-0" × 12'-0"</text>
+<text x="406.0" y="105.45000000000002" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="9" text-anchor="middle" fill="#1C1915" opacity="0.65">216 SF</text>
+</g>
+<g data-room="PrimBath">
+<rect x="534.1" y="7.0" width="102.90000000000002" height="158.90000000000003" fill="#B7C9C8" stroke="#1C1915" stroke-width="2"/>
+<text x="585.5500000000001" y="80.45000000000002" font-family="'IBM Plex Sans', Arial, sans-serif" font-size="11" font-weight="600" letter-spacing="0.5" text-anchor="middle" fill="#1C1915">PRIM BATH</text>
+<text x="585.5500000000001" y="94.45000000000002" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="9" text-anchor="middle" fill="#1C1915" opacity="0.65">8'-0" × 12'-0"</text>
+<text x="585.5500000000001" y="105.45000000000002" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="9" text-anchor="middle" fill="#1C1915" opacity="0.65">96 SF</text>
+</g>
+<g data-room="Bed2">
+<rect x="44.1" y="7.0" width="163.79999999999998" height="158.90000000000003" fill="#C9D4C2" stroke="#1C1915" stroke-width="2"/>
+<text x="126.0" y="80.45000000000002" font-family="'IBM Plex Sans', Arial, sans-serif" font-size="11" font-weight="600" letter-spacing="0.5" text-anchor="middle" fill="#1C1915">BED 2</text>
+<text x="126.0" y="94.45000000000002" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="9" text-anchor="middle" fill="#1C1915" opacity="0.65">12'-0" × 12'-0"</text>
+<text x="126.0" y="105.45000000000002" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="9" text-anchor="middle" fill="#1C1915" opacity="0.65">144 SF</text>
+</g>
+<g data-room="Bed3">
+<rect x="7.0" y="170.09999999999997" width="116.89999999999999" height="205.8" fill="#C9D4C2" stroke="#1C1915" stroke-width="2"/>
+<text x="65.45" y="267.0" font-family="'IBM Plex Sans', Arial, sans-serif" font-size="11" font-weight="600" letter-spacing="0.5" text-anchor="middle" fill="#1C1915">BED 3</text>
+<text x="65.45" y="281.0" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="9" text-anchor="middle" fill="#1C1915" opacity="0.65">9'-0" × 15'-0"</text>
+<text x="65.45" y="292.0" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="9" text-anchor="middle" fill="#1C1915" opacity="0.65">135 SF</text>
+</g>
+<g data-room="Bath2">
+<rect x="212.1" y="7.0" width="65.80000000000001" height="158.90000000000003" fill="#B7C9C8" stroke="#1C1915" stroke-width="2"/>
+<text x="245.0" y="84.45000000000002" font-family="'IBM Plex Sans', Arial, sans-serif" font-size="8" font-weight="600" text-anchor="middle" fill="#1C1915">BATH 2</text>
+<text x="245.0" y="94.45000000000002" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="7" text-anchor="middle" fill="#1C1915" opacity="0.65">60 SF</text>
+</g>
+<g data-room="PrimaryCloset">
+<rect x="324.09999999999997" y="170.09999999999997" width="51.80000000000004" height="65.80000000000004" fill="url(#closetHatch)" stroke="#1C1915" stroke-width="2"/>
+<text x="350.0" y="201.0" font-family="'IBM Plex Sans', Arial, sans-serif" font-size="8" font-weight="600" text-anchor="middle" fill="#1C1915">PRIMARY…</text>
+<text x="350.0" y="211.0" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="7" text-anchor="middle" fill="#1C1915" opacity="0.65">20 SF</text>
+</g>
+<g data-room="Bed2Closet">
+<rect x="7.0" y="7.0" width="32.9" height="74.90000000000002" fill="url(#closetHatch)" stroke="#1C1915" stroke-width="2"/>
+<text x="23.45" y="47.45000000000001" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="6.5" text-anchor="middle" fill="#1C1915" opacity="0.7">18 SF</text>
+</g>
+<g data-room="Bed3Closet">
+<rect x="7.0" y="86.09999999999998" width="32.9" height="79.80000000000004" fill="url(#closetHatch)" stroke="#1C1915" stroke-width="2"/>
+<text x="23.45" y="129.0" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="6.5" text-anchor="middle" fill="#1C1915" opacity="0.7">18 SF</text>
+</g>
+<rect x="0" y="0" width="644" height="462" fill="none" stroke="#1C1915" stroke-width="2"/>
+<path d="M 126.0,441.0 L 168.0,441.0 A 42.0,42.0 0 0,1 126.0,399.0" fill="none" stroke="#1C1915" stroke-width="1.25"/>
+<path d="M 378.0,406.0 L 420.0,406.0 A 42.0,42.0 0 0,1 378.0,364.0" fill="none" stroke="#1C1915" stroke-width="1.25"/>
+<path d="M 448.0,308.0 L 448.0,350.0 A 42.0,42.0 0 0,1 490.0,308.0" fill="none" stroke="#1C1915" stroke-width="1.25"/>
+<path d="M 203.0,238.0 L 203.0,280.0 A 42.0,42.0 0 0,1 245.0,238.0" fill="none" stroke="#1C1915" stroke-width="1.25"/>
+<path d="M 581.0,308.0 L 581.0,350.0 A 42.0,42.0 0 0,1 623.0,308.0" fill="none" stroke="#1C1915" stroke-width="1.25"/>
+<path d="M 280.0,168.0 L 280.0,210.0 A 42.0,42.0 0 0,1 322.0,168.0" fill="none" stroke="#1C1915" stroke-width="1.25"/>
+<path d="M 532.0,105.0 L 574.0,105.0 A 42.0,42.0 0 0,1 532.0,63.0" fill="none" stroke="#1C1915" stroke-width="1.25"/>
+<path d="M 147.0,168.0 L 147.0,210.0 A 42.0,42.0 0 0,1 189.0,168.0" fill="none" stroke="#1C1915" stroke-width="1.25"/>
+<path d="M 126.0,224.0 L 168.0,224.0 A 42.0,42.0 0 0,1 126.0,182.0" fill="none" stroke="#1C1915" stroke-width="1.25"/>
+<path d="M 224.0,168.0 L 224.0,210.0 A 42.0,42.0 0 0,1 266.0,168.0" fill="none" stroke="#1C1915" stroke-width="1.25"/>
+<path d="M 329.0,168.0 L 329.0,210.0 A 42.0,42.0 0 0,1 371.0,168.0" fill="none" stroke="#1C1915" stroke-width="1.25"/>
+<path d="M 42.0,63.0 L 84.0,63.0 A 42.0,42.0 0 0,1 42.0,21.0" fill="none" stroke="#1C1915" stroke-width="1.25"/>
+<path d="M 0.0,168.0 L 0.0,210.0 A 42.0,42.0 0 0,1 42.0,168.0" fill="none" stroke="#1C1915" stroke-width="1.25"/>
+<line x1="35.0" y1="459.5" x2="91.0" y2="459.5" stroke="#9A3B2F" stroke-width="1.5"/>
+<line x1="35.0" y1="464.5" x2="91.0" y2="464.5" stroke="#9A3B2F" stroke-width="1.5"/>
+<line x1="224.0" y1="459.5" x2="280.0" y2="459.5" stroke="#9A3B2F" stroke-width="1.5"/>
+<line x1="224.0" y1="464.5" x2="280.0" y2="464.5" stroke="#9A3B2F" stroke-width="1.5"/>
+<line x1="641.5" y1="210.0" x2="641.5" y2="266.0" stroke="#9A3B2F" stroke-width="1.5"/>
+<line x1="646.5" y1="210.0" x2="646.5" y2="266.0" stroke="#9A3B2F" stroke-width="1.5"/>
+<line x1="441.0" y1="459.5" x2="497.0" y2="459.5" stroke="#9A3B2F" stroke-width="1.5"/>
+<line x1="441.0" y1="464.5" x2="497.0" y2="464.5" stroke="#9A3B2F" stroke-width="1.5"/>
+<line x1="641.5" y1="357.0" x2="641.5" y2="413.0" stroke="#9A3B2F" stroke-width="1.5"/>
+<line x1="646.5" y1="357.0" x2="646.5" y2="413.0" stroke="#9A3B2F" stroke-width="1.5"/>
+<line x1="378.0" y1="-2.5" x2="434.0" y2="-2.5" stroke="#9A3B2F" stroke-width="1.5"/>
+<line x1="378.0" y1="2.5" x2="434.0" y2="2.5" stroke="#9A3B2F" stroke-width="1.5"/>
+<line x1="641.5" y1="56.0" x2="641.5" y2="112.0" stroke="#9A3B2F" stroke-width="1.5"/>
+<line x1="646.5" y1="56.0" x2="646.5" y2="112.0" stroke="#9A3B2F" stroke-width="1.5"/>
+<line x1="98.0" y1="-2.5" x2="154.0" y2="-2.5" stroke="#9A3B2F" stroke-width="1.5"/>
+<line x1="98.0" y1="2.5" x2="154.0" y2="2.5" stroke="#9A3B2F" stroke-width="1.5"/>
+<line x1="-2.5" y1="245.0" x2="-2.5" y2="301.0" stroke="#9A3B2F" stroke-width="1.5"/>
+<line x1="2.5" y1="245.0" x2="2.5" y2="301.0" stroke="#9A3B2F" stroke-width="1.5"/>
+<line x1="217.0" y1="-2.5" x2="273.0" y2="-2.5" stroke="#9A3B2F" stroke-width="1.5"/>
+<line x1="217.0" y1="2.5" x2="273.0" y2="2.5" stroke="#9A3B2F" stroke-width="1.5"/>
+<line x1="0" y1="-9" x2="644" y2="-9" stroke="#1C1915" stroke-width="1"/>
+<line x1="0" y1="0" x2="0" y2="-9" stroke="#1C1915" stroke-width="0.75" opacity="0.6"/>
+<line x1="644" y1="0" x2="644" y2="-9" stroke="#1C1915" stroke-width="0.75" opacity="0.6"/>
+<text x="322.0" y="-12" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="9.5" text-anchor="middle" fill="#1C1915">46'-0"</text>
+<line x1="-24" y1="0" x2="-24" y2="462" stroke="#1C1915" stroke-width="1"/>
+<line x1="-24" y1="0" x2="0" y2="0" stroke="#1C1915" stroke-width="0.75" opacity="0.6"/>
+<line x1="-24" y1="462" x2="0" y2="462" stroke="#1C1915" stroke-width="0.75" opacity="0.6"/>
+<text x="-28" y="231.0" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="9.5" text-anchor="middle" fill="#1C1915" transform="rotate(-90 -28 231.0)">33'-0"</text>
+<path d="M 638,-46 L 644,-24 L 638,-28 L 632,-24 Z" fill="#1C1915"/><text x="638" y="-13" font-family="'IBM Plex Sans', Arial, sans-serif" font-size="9" font-weight="600" text-anchor="middle" fill="#1C1915">N</text>
+<line x1="0" y1="480" x2="140" y2="480" stroke="#1C1915" stroke-width="1.5"/><line x1="0" y1="476" x2="0" y2="484" stroke="#1C1915" stroke-width="1.5"/><line x1="140" y1="476" x2="140" y2="484" stroke="#1C1915" stroke-width="1.5"/><text x="70.0" y="496" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="9" text-anchor="middle" fill="#1C1915">10 FT</text>
+<text x="454" y="486" font-family="'IBM Plex Sans', Arial, sans-serif" font-size="12" font-weight="600" letter-spacing="0.5" fill="#1C1915">FLOOR PLAN</text>
+<line x1="454" y1="492" x2="644" y2="492" stroke="#9A3B2F" stroke-width="2"/>
+<text x="454" y="506" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="9" fill="#1C1915" opacity="0.75">1,518 SF</text>
+<text x="454" y="519" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="9" fill="#1C1915" opacity="0.75">3 BED / 2 BATH</text>
+<text x="454" y="532" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="9" fill="#1C1915" opacity="0.75">TRADITIONAL</text>
+<text x="454" y="545" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="9" fill="#1C1915" opacity="0.75">SEP 01 2026</text>
+</svg>

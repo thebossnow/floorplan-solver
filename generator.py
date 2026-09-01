@@ -10,7 +10,7 @@ anything bespoke, build the Room/Adj list by hand instead.
 
 from typing import Dict, List, Tuple
 
-from layout import Room, Adj, Footprint, add_closets
+from layout import Room, Adj, Footprint, Proximity, add_closets
 
 MIN_AREA = 400
 MAX_AREA = 10000
@@ -189,6 +189,36 @@ HALLWAYS = ("Hall",)  # solve()'s door-access hard constraint: every room not
     # in `private` (see above) must reach the exterior or one of these rooms
     # through a door-width wall segment. generate_program()'s Hall touches
     # every bedroom/secondary-bath in every style, so it's the right anchor.
+
+
+PRODUCTION_WEIGHTS = dict(
+    aspect_penalty_weight=1,
+    compactness_weight=1,
+    proximity_weight=1,
+    # left off in production: at weight 1, ~150s to reach true OPTIMAL on a
+    # 12-room house program (see HANDOFF), and the candidate-guideline-line
+    # count that costs scales with footprint dimension in feet, not room
+    # count -- a real risk on larger footprints. Revisit once that scaling
+    # is addressed (see layout._guideline_usage).
+    alignment_weight=0,
+)
+
+DEFAULT_PROXIMITY_PAIRS = (
+    ("Kitchen", "Living"),
+    ("Kitchen", "Dining"),
+    ("Kitchen", "Great"),
+    ("Primary", "PrimBath"),
+)
+
+
+def default_proximity(rooms: List[Room]) -> List[Proximity]:
+    """Soft-proximity pairs for solve()'s proximity_weight, filtered to
+    just the room names actually present in `rooms` -- covers both STYLES
+    (Kitchen/Living/Dining vs. the merged Great room in open_concept) and
+    a single zone's room subset (zoning.solve_zoned() only wants pairs
+    where both rooms landed in the same zone)."""
+    names = {r.name for r in rooms}
+    return [Proximity(a, b) for a, b in DEFAULT_PROXIMITY_PAIRS if a in names and b in names]
 
 
 def zone_of_program(rooms: List[Room]) -> Dict[str, str]:

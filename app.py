@@ -14,13 +14,15 @@ genuinely INFEASIBLE rather than just slow, where the same rooms split
 into a public/private zone solve fine.
 """
 
+import os
 import time
 from datetime import date
 
 from flask import Flask, render_template, request
 
-from generator import (HALLWAYS, MAX_AREA, MAX_BATHS, MAX_BEDS, MIN_AREA, STYLES,
-                        generate_program, shelf_pack_hint, zone_of_program)
+from generator import (HALLWAYS, MAX_AREA, MAX_BATHS, MAX_BEDS, MIN_AREA, PRODUCTION_WEIGHTS,
+                        STYLES, default_proximity, generate_program, shelf_pack_hint,
+                        zone_of_program)
 from layout import FILL_BY_KIND, circulation_ok, display_name, place_openings, room_kind, solve, to_svg
 from zoning import solve_zoned
 
@@ -38,6 +40,22 @@ ZONE_ROOM_THRESHOLD = 14   # more rooms than this: split into zones instead --
                            # the default 3-bed/2-bath program is 14 rooms and
                            # solves fine unzoned, so this shouldn't fire for typical inputs
 ZONE_TIME_LIMIT = 15.0     # per zone, so a worst-case zoned solve is 2x this
+
+# empty-state sample: a pre-solved SVG cached to disk (regenerate via the
+# one-off script this file's git history/HANDOFF notes, or by hand: run
+# generate_program(1500, 3, 2, "rectangular", "traditional") through solve()
+# the same way index() below does, then to_svg(..., path="static/sample-plan.svg"))
+# rather than re-solved on every empty-state page load
+with open(os.path.join(os.path.dirname(__file__), "static", "sample-plan.svg")) as f:
+    SAMPLE_SVG = f.read()
+SAMPLE_CAPTION = "Example · 1,500 sf ranch"
+
+# quick-start presets shown on the empty state -- (area, beds, baths, shape, style)
+PRESETS = [
+    dict(label="1,200 sf square", area=1200, beds=2, baths=2, shape="square", style="traditional"),
+    dict(label="1,500 sf ranch", area=1500, beds=3, baths=2, shape="rectangular", style="traditional"),
+    dict(label="2,000 sf open concept", area=2000, beds=3, baths=2, shape="rectangular", style="open_concept"),
+]
 
 app = Flask(__name__)
 
@@ -62,13 +80,19 @@ def index():
     result = None
     error = None
 
-    if request.method == "POST":
+    # a GET with query params is a "copy link" visit reproducing a past
+    # result (see templates/index.html's Copy link button, which builds
+    # this same area/beds/baths/shape/style querystring via url_for) --
+    # solve immediately rather than just prefilling the form, so the link
+    # is a true "see this exact result" link, not just a starting point
+    source = request.form if request.method == "POST" else request.args
+    if request.method == "POST" or source:
         try:
-            form["area"] = int(request.form.get("area", ""))
-            form["beds"] = int(request.form.get("beds", ""))
-            form["baths"] = int(request.form.get("baths", ""))
-            form["shape"] = request.form.get("shape", "rectangular")
-            form["style"] = request.form.get("style", "traditional")
+            form["area"] = int(source.get("area", ""))
+            form["beds"] = int(source.get("beds", ""))
+            form["baths"] = int(source.get("baths", ""))
+            form["shape"] = source.get("shape", "rectangular")
+            form["style"] = source.get("style", "traditional")
 
             if not (MIN_AREA <= form["area"] <= MAX_AREA):
                 raise ValueError(f"Area must be between {MIN_AREA} and {MAX_AREA} sq ft.")
@@ -79,21 +103,29 @@ def index():
 
             fp, rooms, adj, private = generate_program(
                 form["area"], form["beds"], form["baths"], form["shape"], form["style"])
+            proximity = default_proximity(rooms)
 
             zoned = len(rooms) > ZONE_ROOM_THRESHOLD
             cross = None
-            objective_value = best_objective_bound = None  # solve_zoned() doesn't expose these yet
+            zone_metrics = None
+            # objective_value/best_objective_bound stay None on the zoned path --
+            # each zone scores its own independent objective (see zone_metrics
+            # below for the per-zone numbers), so there's no single meaningful
+            # value to report here the way there is for a single solve() call.
+            objective_value = best_objective_bound = None
             t0 = time.time()
             if zoned:
                 zone_of = zone_of_program(rooms)
-                plan, status, cross = solve_zoned(
+                plan, status, cross, zone_metrics = solve_zoned(
                     fp, rooms, adj, zone_of, time_limit=ZONE_TIME_LIMIT, workers=8,
-                    hallways=HALLWAYS, private=private)
+                    hallways=HALLWAYS, private=private,
+                    weights=PRODUCTION_WEIGHTS, proximity=proximity)
             else:
                 hint = shelf_pack_hint(fp, rooms)
                 plan, status, objective_value, best_objective_bound, solver_wall_time = solve(
                     fp, rooms, adj, time_limit=TIME_LIMIT, workers=8, hint=hint,
-                    hallways=HALLWAYS, private=private)
+                    hallways=HALLWAYS, private=private,
+                    proximity=proximity, **PRODUCTION_WEIGHTS)
             elapsed = time.time() - t0
 
             if not plan:
@@ -128,6 +160,7 @@ def index():
                     elapsed=round(elapsed, 1),
                     objective_value=objective_value,
                     best_objective_bound=best_objective_bound,
+                    zone_metrics=zone_metrics,
                     footprint=f'{fp.width} x {fp.height} ft ({fp.area()} sf)',
                     total=sum(r["area"] for r in plan.values()),
                     circulation_ok=ok,
@@ -142,6 +175,7 @@ def index():
         max_beds=MAX_BEDS, max_baths=MAX_BATHS, min_area=MIN_AREA, max_area=MAX_AREA,
         styles=list(STYLES),
         living=FILL_BY_KIND["living"], sleep=FILL_BY_KIND["sleep"], wet=FILL_BY_KIND["wet"],
+        sample_svg=SAMPLE_SVG, sample_caption=SAMPLE_CAPTION, presets=PRESETS,
     )
 
 
