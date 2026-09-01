@@ -608,8 +608,55 @@ def _room_fill(name):
     return "url(#closetHatch)" if kind == "closet" else FILL_BY_KIND[kind]
 
 
+def _north_arrow(x, y):
+    """North-pointing triangle + label, (x,y) is the base center."""
+    return (f'<path d="M {x},{y-22} L {x+6},{y} L {x},{y-4} L {x-6},{y} Z" fill="{INK}"/>'
+            f'<text x="{x}" y="{y+11}" font-family="{FONT_SANS}" font-size="9" '
+            f'font-weight="600" text-anchor="middle" fill="{INK}">N</text>')
+
+
+def _scale_bar(x0, y, scale):
+    length = 10 * scale
+    return (f'<line x1="{x0}" y1="{y}" x2="{x0+length}" y2="{y}" stroke="{INK}" stroke-width="1.5"/>'
+            f'<line x1="{x0}" y1="{y-4}" x2="{x0}" y2="{y+4}" stroke="{INK}" stroke-width="1.5"/>'
+            f'<line x1="{x0+length}" y1="{y-4}" x2="{x0+length}" y2="{y+4}" stroke="{INK}" stroke-width="1.5"/>'
+            f'<text x="{x0+length/2}" y="{y+16}" font-family="{FONT_MONO}" font-size="9" '
+            f'text-anchor="middle" fill="{INK}">10 FT</text>')
+
+
+def _title_block_svg(x0, y0, width, title, lines):
+    p = [f'<text x="{x0}" y="{y0+10}" font-family="{FONT_SANS}" font-size="12" '
+         f'font-weight="600" letter-spacing="0.5" fill="{INK}">{title}</text>',
+         f'<line x1="{x0}" y1="{y0+16}" x2="{x0+width}" y2="{y0+16}" '
+         f'stroke="{ACCENT}" stroke-width="2"/>']
+    for i, line in enumerate(lines):
+        p.append(f'<text x="{x0}" y="{y0+30+i*13}" font-family="{FONT_MONO}" '
+                  f'font-size="9" fill="{INK}" opacity="0.75">{line}</text>')
+    return p
+
+
+def _exterior_dims(W, H, scale):
+    """Overall width (top) and depth (left) dimension strings with
+    extension ticks -- no per-room span callouts, just the two overalls."""
+    p = []
+    y = -9
+    p.append(f'<line x1="0" y1="{y}" x2="{W*scale}" y2="{y}" stroke="{INK}" stroke-width="1"/>')
+    for x in (0, W * scale):
+        p.append(f'<line x1="{x}" y1="0" x2="{x}" y2="{y}" stroke="{INK}" stroke-width="0.75" opacity="0.6"/>')
+    p.append(f'<text x="{W*scale/2}" y="{y-3}" font-family="{FONT_MONO}" font-size="9.5" '
+             f'text-anchor="middle" fill="{INK}">{W}\'-0"</text>')
+    x = -24
+    p.append(f'<line x1="{x}" y1="0" x2="{x}" y2="{H*scale}" stroke="{INK}" stroke-width="1"/>')
+    for gy in (0, H * scale):
+        p.append(f'<line x1="{x}" y1="{gy}" x2="0" y2="{gy}" stroke="{INK}" stroke-width="0.75" opacity="0.6"/>')
+    p.append(f'<text x="{x-4}" y="{H*scale/2}" font-family="{FONT_MONO}" font-size="9.5" '
+             f'text-anchor="middle" fill="{INK}" transform="rotate(-90 {x-4} {H*scale/2})">'
+             f'{H}\'-0"</text>')
+    return p
+
+
 def to_svg(plan, fp: Footprint, scale=14, path="plan.svg", openings=None,
-           interior_thickness=0.3, exterior_thickness=0.5):
+           interior_thickness=0.3, exterior_thickness=0.5, title_block=None):
     """Renders the plan to SVG. If path is None, returns the markup string
     directly instead of writing to disk -- use this from a server handling
     concurrent requests, since writing every request to the same path is a
@@ -626,16 +673,25 @@ def to_svg(plan, fp: Footprint, scale=14, path="plan.svg", openings=None,
 
     Rooms are filled by use (living/sleep/wet/closet-hatch, Hall left
     neutral) on a 1ft graph-paper grid, doors draw as a swing arc and
-    windows as a double line rather than a flat colored rect."""
+    windows as a double line rather than a flat colored rect. The sheet
+    carries overall width/depth dimension strings, a north arrow, and a
+    10ft scale bar; title_block, if given, is
+    {"title": str, "lines": [str, ...]} drawn as a small block in the
+    bottom-right margin (e.g. area/beds-baths/style/date)."""
     W, H = fp.width, fp.height
-    p = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{W*scale+40}" '
-         f'height="{H*scale+40}" viewBox="-20 -20 {W*scale+40} {H*scale+40}">',
+    margin_left, margin_right, margin_top = 34, 20, 48
+    n_tb_lines = len(title_block.get("lines", [])) if title_block else 0
+    margin_bottom = max(40, 14 + 30 + max(0, n_tb_lines - 1) * 13 + 10) if title_block else 40
+    canvas_w = W * scale + margin_left + margin_right
+    canvas_h = H * scale + margin_top + margin_bottom
+    p = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{canvas_w}" height="{canvas_h}" '
+         f'viewBox="-{margin_left} -{margin_top} {canvas_w} {canvas_h}">',
          f'<defs><pattern id="closetHatch" width="6" height="6" '
          f'patternTransform="rotate(45)" patternUnits="userSpaceOnUse">'
          f'<rect width="6" height="6" fill="{SLEEP}"/>'
          f'<line x1="0" y1="0" x2="0" y2="6" stroke="{INK}" stroke-width="1" opacity="0.25"/>'
          f'</pattern></defs>',
-         f'<rect x="-20" y="-20" width="100%" height="100%" fill="{SHEET}"/>']
+         f'<rect x="-{margin_left}" y="-{margin_top}" width="100%" height="100%" fill="{SHEET}"/>']
     for gx in range(W + 1):
         heavy = gx % 5 == 0
         p.append(f'<line x1="{gx*scale}" y1="0" x2="{gx*scale}" y2="{H*scale}" '
@@ -718,6 +774,15 @@ def to_svg(plan, fp: Footprint, scale=14, path="plan.svg", openings=None,
             p.append(_door_svg(o, scale, H))
         else:
             p.extend(_window_svg(o, scale, H))
+    p.extend(_exterior_dims(W, H, scale))
+    p.append(_north_arrow(W * scale - 6, -24))
+    p.append(_scale_bar(0, H * scale + 18, scale))
+    if title_block:
+        tb_w = min(190, max(100, W * scale - 160))
+        tb_x = W * scale - tb_w
+        p.extend(_title_block_svg(tb_x, H * scale + 14, tb_w,
+                                   title_block.get("title", "FLOOR PLAN"),
+                                   title_block.get("lines", [])))
     p.append("</svg>")
     markup = "\n".join(p)
     if path is None:

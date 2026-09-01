@@ -15,6 +15,7 @@ into a public/private zone solve fine.
 """
 
 import time
+from datetime import date
 
 from flask import Flask, render_template, request
 
@@ -97,7 +98,16 @@ def index():
                          "Try a larger area, fewer bedrooms/bathrooms, or a different shape.")
             else:
                 openings = place_openings(plan, fp, adj, rooms)
-                svg_markup = to_svg(plan, fp, path=None, openings=openings)
+                title_block = dict(
+                    title="FLOOR PLAN",
+                    lines=[
+                        f'{fp.area():,} SF',
+                        f'{form["beds"]} BED / {form["baths"]} BATH',
+                        form["style"].replace("_", " ").upper(),
+                        date.today().strftime("%b %d %Y").upper(),
+                    ],
+                )
+                svg_markup = to_svg(plan, fp, path=None, openings=openings, title_block=title_block)
                 ok, unreachable = circulation_ok(plan, "Entry", private=private)
                 result = dict(
                     svg=svg_markup,
