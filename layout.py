@@ -677,7 +677,11 @@ def to_svg(plan, fp: Footprint, scale=14, path="plan.svg", openings=None,
     carries overall width/depth dimension strings, a north arrow, and a
     10ft scale bar; title_block, if given, is
     {"title": str, "lines": [str, ...]} drawn as a small block in the
-    bottom-right margin (e.g. area/beds-baths/style/date)."""
+    bottom-right margin (e.g. area/beds-baths/style/date). Each room's
+    shapes and labels sit inside <g data-room="{name}"> (the raw plan
+    key, not display_name()'s formatted label) so a page embedding this
+    markup can hook up hover-sync with a schedule table keyed the same
+    way."""
     W, H = fp.width, fp.height
     margin_left, margin_right, margin_top = 34, 20, 48
     n_tb_lines = len(title_block.get("lines", [])) if title_block else 0
@@ -706,6 +710,7 @@ def to_svg(plan, fp: Footprint, scale=14, path="plan.svg", openings=None,
         p.append(f'<rect x="{x1*scale}" y="{(H-y2)*scale}" width="{(x2-x1)*scale}" '
                  f'height="{(y2-y1)*scale}" fill="{GRID}"/>')
     for n, room in plan.items():
+        p.append(f'<g data-room="{n}">')
         parts = room["parts"]
         fill = _room_fill(n)
         biggest = max(parts, key=lambda pt: pt["area"])
@@ -767,6 +772,7 @@ def to_svg(plan, fp: Footprint, scale=14, path="plan.svg", openings=None,
                 p.append(f'<text x="{cx}" y="{cy+4}" font-family="{FONT_MONO}" '
                          f'font-size="8" text-anchor="middle" fill="{INK}" opacity="0.55">'
                          f'{dims}</text>')
+        p.append('</g>')
     p.append(f'<rect x="0" y="0" width="{W*scale}" height="{H*scale}" '
              f'fill="none" stroke="{INK}" stroke-width="2"/>')
     for o in openings or []:

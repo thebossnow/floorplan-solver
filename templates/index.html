@@ -67,6 +67,40 @@
   .warn { color: var(--accent); font-weight: 600; }
   svg { max-width: 100%; height: auto; border: 1px solid var(--grid); border-radius: 8px;
         background: var(--sheet); }
+  svg g[data-room] { cursor: pointer; }
+  svg g[data-room].room-hover > rect,
+  svg g[data-room].room-hover > polygon { stroke: var(--accent); stroke-width: 3; }
+
+  /* stepper (beds/baths) */
+  .stepper { display: flex; align-items: stretch; border: 1px solid var(--grid);
+             border-radius: 6px; overflow: hidden; background: #fff; }
+  .stepper button { flex: 0 0 40px; min-height: 40px; padding: 0; border: none;
+                     background: var(--sheet-2); font-size: 17px; font-weight: 600;
+                     color: var(--ink); border-radius: 0; }
+  .stepper button:hover { background: var(--grid); }
+  .stepper button:active { transform: none; }
+  .stepper input { border: none; text-align: center; -moz-appearance: textfield; }
+  .stepper input::-webkit-outer-spin-button, .stepper input::-webkit-inner-spin-button {
+    -webkit-appearance: none; margin: 0;
+  }
+
+  /* chips (shape/style) */
+  .chip-group { display: flex; gap: 8px; flex-wrap: wrap; }
+  .chip-group input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+  .chip-group label { display: flex; align-items: center; gap: 7px; padding: 9px 12px;
+                       border: 1px solid var(--grid); border-radius: 7px; background: #fff;
+                       font-size: 13px; cursor: pointer; user-select: none;
+                       transition: border-color 150ms, background 150ms; }
+  .chip-group input:checked + label { border-color: var(--accent); background: #f6e9e4; }
+  .chip-group input:focus-visible + label { outline: 2px solid var(--ink); outline-offset: 1px; }
+  .shape-icon { display: inline-block; border: 2px solid currentColor; border-radius: 2px;
+                flex-shrink: 0; }
+  .shape-icon.rect { width: 22px; height: 14px; }
+  .shape-icon.square { width: 15px; height: 15px; }
+
+  .download-btn { margin-top: 10px; padding: 9px 14px; font-size: 13px; font-weight: 500;
+                   background: #fff; color: var(--ink); border: 1px solid var(--grid); }
+  .download-btn:hover { background: var(--sheet-2); border-color: var(--ink); }
 
   details { margin: 20px 0 0; font-size: 13px; color: var(--ink-soft); }
   details summary { cursor: pointer; user-select: none; }
@@ -83,6 +117,8 @@
        font-size: 10px; letter-spacing: 0.06em; }
   tr.group-row td { padding-top: 14px; font-size: 10px; text-transform: uppercase;
                      letter-spacing: 0.08em; color: var(--ink-soft); border-bottom: none; }
+  tr[data-room] { cursor: pointer; }
+  tr[data-room].room-hover { background: #f6e9e4; }
   .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px;
             margin-right: 8px; border: 1px solid rgba(0,0,0,0.15); vertical-align: middle;
             flex-shrink: 0; }
@@ -107,34 +143,40 @@
       </div>
       <div>
         <label for="beds">Bedrooms</label>
-        <select id="beds" name="beds">
-          {% for n in range(1, max_beds + 1) %}
-          <option value="{{ n }}" {{ "selected" if form.beds == n }}>{{ n }}</option>
-          {% endfor %}
-        </select>
+        <div class="stepper" data-min="1" data-max="{{ max_beds }}">
+          <button type="button" data-step="-1" aria-label="Fewer bedrooms">−</button>
+          <input type="number" id="beds" name="beds" min="1" max="{{ max_beds }}" value="{{ form.beds }}">
+          <button type="button" data-step="1" aria-label="More bedrooms">+</button>
+        </div>
       </div>
       <div>
         <label for="baths">Bathrooms</label>
-        <select id="baths" name="baths">
-          {% for n in range(1, max_baths + 1) %}
-          <option value="{{ n }}" {{ "selected" if form.baths == n }}>{{ n }}</option>
-          {% endfor %}
-        </select>
+        <div class="stepper" data-min="1" data-max="{{ max_baths }}">
+          <button type="button" data-step="-1" aria-label="Fewer bathrooms">−</button>
+          <input type="number" id="baths" name="baths" min="1" max="{{ max_baths }}" value="{{ form.baths }}">
+          <button type="button" data-step="1" aria-label="More bathrooms">+</button>
+        </div>
       </div>
       <div>
-        <label for="shape">Foundation shape</label>
-        <select id="shape" name="shape">
-          <option value="rectangular" {{ "selected" if form.shape == "rectangular" }}>Rectangular</option>
-          <option value="square" {{ "selected" if form.shape == "square" }}>Square</option>
-        </select>
+        <label>Foundation shape</label>
+        <div class="chip-group">
+          <input type="radio" id="shape-rectangular" name="shape" value="rectangular"
+                 {{ "checked" if form.shape == "rectangular" }}>
+          <label for="shape-rectangular"><span class="shape-icon rect"></span>Rectangular</label>
+          <input type="radio" id="shape-square" name="shape" value="square"
+                 {{ "checked" if form.shape == "square" }}>
+          <label for="shape-square"><span class="shape-icon square"></span>Square</label>
+        </div>
       </div>
       <div>
-        <label for="style">Room style</label>
-        <select id="style" name="style">
+        <label>Room style</label>
+        <div class="chip-group">
           {% for s in styles %}
-          <option value="{{ s }}" {{ "selected" if form.style == s }}>{{ s.replace("_", " ") | title }}</option>
+          <input type="radio" id="style-{{ s }}" name="style" value="{{ s }}"
+                 {{ "checked" if form.style == s }}>
+          <label for="style-{{ s }}">{{ s.replace("_", " ") | title }}</label>
           {% endfor %}
-        </select>
+        </div>
       </div>
       <button type="submit" id="generate-btn">Draw this house</button>
     </form>
@@ -167,6 +209,8 @@
 
     {{ result.svg | safe }}
 
+    <button type="button" class="download-btn" id="download-svg">Download sheet</button>
+
     <details>
       <summary>How this was built</summary>
       <div class="solver-info">
@@ -189,7 +233,7 @@
     <tr class="group-row"><td colspan="4">{{ r.group }}</td></tr>
     {% set ns.group = r.group %}
     {% endif %}
-    <tr>
+    <tr data-room="{{ r.raw_name }}">
       <td><span class="swatch" style="background:{{ r.swatch }}"></span>{{ r.name }}</td>
       <td>{{ r.area }} sf</td>
       <td>{{ r.target }} sf</td>
@@ -205,6 +249,47 @@
     btn.disabled = true;
     btn.textContent = 'Searching layouts…';
   });
+
+  document.querySelectorAll('.stepper').forEach(function (stepper) {
+    var input = stepper.querySelector('input');
+    var min = parseInt(stepper.dataset.min, 10);
+    var max = parseInt(stepper.dataset.max, 10);
+    stepper.querySelectorAll('button').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var v = (parseInt(input.value, 10) || min) + parseInt(btn.dataset.step, 10);
+        input.value = Math.min(max, Math.max(min, v));
+      });
+    });
+  });
+
+  document.querySelectorAll('[data-room]').forEach(function (el) {
+    el.addEventListener('mouseenter', function () {
+      document.querySelectorAll('[data-room="' + CSS.escape(el.dataset.room) + '"]')
+        .forEach(function (m) { m.classList.add('room-hover'); });
+    });
+    el.addEventListener('mouseleave', function () {
+      document.querySelectorAll('[data-room="' + CSS.escape(el.dataset.room) + '"]')
+        .forEach(function (m) { m.classList.remove('room-hover'); });
+    });
+  });
+
+  var downloadBtn = document.getElementById('download-svg');
+  if (downloadBtn) {
+    downloadBtn.addEventListener('click', function () {
+      var svg = document.querySelector('.drawing-col svg');
+      if (!svg) return;
+      var source = '<?xml version="1.0" standalone="no"?>\r\n' + new XMLSerializer().serializeToString(svg);
+      var blob = new Blob([source], {type: 'image/svg+xml;charset=utf-8'});
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = 'floor-plan.svg';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    });
+  }
 </script>
 
 </body>

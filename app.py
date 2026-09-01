@@ -48,7 +48,7 @@ def _room_rows(plan):
         kind = room_kind(name)
         swatch = FILL_BY_KIND["sleep"] if kind == "closet" else FILL_BY_KIND[kind]
         rows.append(dict(
-            name=display_name(name), group=GROUP_BY_KIND[kind], swatch=swatch,
+            name=display_name(name), raw_name=name, group=GROUP_BY_KIND[kind], swatch=swatch,
             area=r["area"], target=r["target"], delta=r["area"] - r["target"],
         ))
     order = {g: i for i, g in enumerate(GROUP_ORDER)}
