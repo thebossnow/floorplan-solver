@@ -1,5 +1,7 @@
 # floorplan-solver
 
+[![Live Demo](https://img.shields.io/badge/demo-metawhalealerts.com-9A3B2F)](https://www.metawhalealerts.com/)
+
 A constraint-solver floor plan layout generator. No trained model, no
 training data. OR-Tools CP-SAT does the search.
 
