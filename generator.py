@@ -25,7 +25,7 @@ ROOM_SPECS = {
     "Dining":   dict(min_dim=8,  max_aspect=1.8),
     "Great":    dict(min_dim=14, max_aspect=2.2),
     "Hall":     dict(min_dim=3,  max_aspect=8.0, needs_exterior=False),
-    "Utility":  dict(min_dim=5,  max_aspect=2.5, needs_exterior=False),
+    "Utility":  dict(min_dim=5,  max_aspect=2.5),
     "Primary":  dict(min_dim=11, max_aspect=1.7),
     "PrimBath": dict(min_dim=5,  max_aspect=2.5),
 }
@@ -183,6 +183,12 @@ def generate_program(total_area: int, beds: int = 3, baths: int = 2,
     # their own ensuite bath/closet
     private = tuple(bathroom_names) + tuple(f"{b}Closet" for b in bedroom_names)
     return fp, rooms, adj, private
+
+
+HALLWAYS = ("Hall",)  # solve()'s door-access hard constraint: every room not
+    # in `private` (see above) must reach the exterior or one of these rooms
+    # through a door-width wall segment. generate_program()'s Hall touches
+    # every bedroom/secondary-bath in every style, so it's the right anchor.
 
 
 def zone_of_program(rooms: List[Room]) -> Dict[str, str]:

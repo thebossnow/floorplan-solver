@@ -15,7 +15,7 @@ Units are integer feet on a 1ft grid. Change GRID to use 6in units.
 
 import re
 from dataclasses import dataclass, field
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Iterable
 from ortools.sat.python import cp_model
 
 
@@ -94,6 +94,12 @@ class Adj:
 
 
 @dataclass
+class Proximity:
+    a: str
+    b: str
+
+
+@dataclass
 class Footprint:
     width: int
     height: int
@@ -106,7 +112,22 @@ class Footprint:
         return a
 
 
-def add_closets(rooms, adjacencies, bedrooms, area=20, min_dim=3, max_aspect=3.0, min_shared=3):
+def _min_dim_floor(name: str) -> Optional[int]:
+    """Type-based minimum-dimension floor for validate_program()'s guardrail:
+    bedrooms >= 4ft, closets >= 2ft, bathrooms >= 5ft, independent of whatever
+    min_dim a caller happens to pass. Matched by the same name conventions as
+    room_kind(), except bathrooms here exclude Utility (room_kind lumps it
+    into "wet" for rendering, but it isn't a bathroom)."""
+    if name.endswith("Closet"):
+        return 2
+    if name == "Primary" or name.startswith("Bed"):
+        return 4
+    if name == "PrimBath" or name.startswith("Bath"):
+        return 5
+    return None
+
+
+def add_closets(rooms, adjacencies, bedrooms, area=20, min_dim=3, max_aspect=3.0, min_shared=2):
     """Attach a mandatory closet to each named bedroom.
 
     A closet is just a small interior room plus a forced Adj to its
@@ -134,7 +155,10 @@ def add_closets(rooms, adjacencies, bedrooms, area=20, min_dim=3, max_aspect=3.0
 # Solver
 # ----------------------------------------------------------------------
 
-def validate_program(footprint: Footprint, rooms: List[Room], adjacencies: List[Adj]):
+def validate_program(footprint: Footprint, rooms: List[Room], adjacencies: List[Adj],
+                      hallways: Optional[Iterable[str]] = None,
+                      private: Optional[Iterable[str]] = None,
+                      proximity: Optional[List[Proximity]] = None):
     """Raise ValueError with a specific, actionable message for a
     self-inconsistent program, instead of letting OR-Tools fail deep inside
     model-building on an invalid variable domain, or burning the full solve
@@ -143,9 +167,30 @@ def validate_program(footprint: Footprint, rooms: List[Room], adjacencies: List[
     if len(names) != len(rooms):
         raise ValueError("room names must be unique")
 
+    for hn in hallways or ():
+        if hn not in names:
+            raise ValueError(f"hallways references unknown room {hn!r}")
+    for pn in private or ():
+        if pn not in names:
+            raise ValueError(f"private references unknown room {pn!r}")
+    both = set(hallways or ()) & set(private or ())
+    if both:
+        raise ValueError(f"room(s) {sorted(both)} listed in both hallways and private")
+    for pr in proximity or ():
+        if pr.a not in names:
+            raise ValueError(f"proximity references unknown room {pr.a!r}")
+        if pr.b not in names:
+            raise ValueError(f"proximity references unknown room {pr.b!r}")
+
     for r in rooms:
         if r.min_dim <= 0:
             raise ValueError(f"{r.name}: min_dim must be positive, got {r.min_dim}")
+        floor = _min_dim_floor(r.name)
+        if floor is not None and r.min_dim < floor:
+            raise ValueError(
+                f"{r.name}: min_dim={r.min_dim} is below the {floor}ft minimum "
+                f"required for this room type"
+            )
         if r.max_aspect < 1:
             raise ValueError(f"{r.name}: max_aspect must be >= 1, got {r.max_aspect}")
         if r.parts < 1:
@@ -221,21 +266,87 @@ def _touch_cases(m, W, H, x1, x2, y1, y2, a, b, min_len, tag):
     return cases
 
 
+def _guideline_usage(m, dim, edges, tag):
+    """Alignment as a covering objective instead of a pairwise one: one bool
+    per candidate integer coordinate along this axis (0..dim), forced true
+    whenever any room edge actually lands there. Minimizing the sum directly
+    rewards reusing an existing wall line over introducing a new one.
+
+    This replaced an earlier pairwise-equality version (one reward literal
+    per room-pair-per-coordinate-combination) that turned out to be a
+    clique-partitioning objective -- correct, but with a famously weak LP
+    relaxation: confirmed via log_search_progress on the 12-room house
+    program that CP-SAT found its final primal value by ~11s and then spent
+    the rest of a 180s budget barely moving the dual bound, refuting one
+    core at a time. A covering objective (this one) has a much tighter
+    relaxation, since "how many distinct values are used" bounds far more
+    cleanly than "how many pairs happen to match."
+
+    edges: list of (part_key, coord_var) for every edge on this axis (e.g.
+    both x1 and x2 of every part, for the x axis). Each edge's membership
+    test needs full reification (both directions), not _touch_cases'
+    one-directional pattern -- an edge that's truly at g must be *forced* to
+    mark g used, or the solver could dodge the cost by just never claiming
+    it, which would silently break the covering count."""
+    used = [m.new_bool_var(f"{tag}_used_{g}") for g in range(dim + 1)]
+    for pk, coord in edges:
+        for g in range(dim + 1):
+            eq = m.new_bool_var(f"{tag}_eq_{pk}_{g}")
+            m.add(coord == g).only_enforce_if(eq)
+            m.add(coord != g).only_enforce_if(eq.Not())
+            m.add_implication(eq, used[g])
+    return used
+
+
 def solve(footprint: Footprint,
           rooms: List[Room],
           adjacencies: List[Adj],
           time_limit: float = 30.0,
           seed: int = 0,
           workers: int = 8,
-          hint: Optional[Dict[str, Tuple[int, int, int, int]]] = None):
-    """hint: optional {part_key: (x1, y1, x2, y2)} warm start, in the same
+          hint: Optional[Dict[str, Tuple[int, int, int, int]]] = None,
+          hallways: Optional[Iterable[str]] = None,
+          private: Optional[Iterable[str]] = None,
+          door_width: int = 3,
+          aspect_penalty_weight: int = 0,
+          compactness_weight: int = 0,
+          alignment_weight: int = 0,
+          proximity: Optional[List[Proximity]] = None,
+          proximity_weight: int = 0):
+    """Returns (plan, status, objective_value, best_objective_bound,
+    wall_time). plan is None when status isn't OPTIMAL/FEASIBLE, and
+    objective_value/best_objective_bound are None along with it (CP-SAT
+    itself returns 0.0 for both with no incumbent, which would misreport as
+    a real zero objective -- reported as None here instead). wall_time is
+    populated regardless of status. Deliberately raw, not a precomputed gap
+    percentage: this objective sums signed weighted terms (area deviation
+    minus alignment reward, etc.) and can land near zero, where a relative
+    gap is unstable -- compute best_objective_bound - objective_value
+    yourself if/how you need it. A FEASIBLE result with a wide gap and a
+    wall_time at (or near) time_limit means the search didn't converge, not
+    that it barely started; a FEASIBLE result with wall_time well under
+    time_limit shouldn't happen (CP-SAT keeps searching for OPTIMAL until
+    the cap unless the model has no room left to search), but check it
+    against time_limit rather than assume.
+
+    hint: optional {part_key: (x1, y1, x2, y2)} warm start, in the same
     part-key namespace as Room.parts (the room name itself for a single-part
     room, f"{name}#{i}" for part i of a multi-part room). Doesn't need to be
     a feasible layout -- it's just a starting point for CP-SAT's search, so a
     fast approximate packer (see generator.shelf_pack_hint) is enough. Parts
-    missing from the dict are left for CP-SAT to place unassisted."""
+    missing from the dict are left for CP-SAT to place unassisted.
 
-    validate_program(footprint, rooms, adjacencies)
+    hallways/private: opt-in door-access hard constraint. If hallways is
+    given (non-empty), every room NOT named in hallways or private must
+    reach either the footprint's exterior boundary or one of the hallway
+    rooms through a door_width-or-longer wall segment -- a room whose only
+    shared walls are with other ordinary rooms is infeasible. private names
+    the rooms exempt from this (closets, ensuite baths -- anything meant by
+    design to have its only door open onto its owner room instead, per
+    add_closets()). Leaving hallways empty/omitted (the default) skips the
+    constraint entirely, so existing callers are unaffected."""
+
+    validate_program(footprint, rooms, adjacencies, hallways, private, proximity)
 
     W, H = footprint.width, footprint.height
     m = cp_model.CpModel()
@@ -346,7 +457,35 @@ def solve(footprint: Footprint,
         m.add_bool_or(lits)
 
     # ------------------------------------------------------------------
-    # objective: hit the area program as closely as possible
+    # door access: every non-private, non-hallway room must reach the
+    # exterior boundary or a hallway room through a door-width segment
+    # (opt-in -- see solve()'s docstring).
+    # ------------------------------------------------------------------
+    if hallways:
+        hallway_set = set(hallways)
+        private_set = set(private or ())
+        for r in rooms:
+            if r.name in hallway_set or r.name in private_set:
+                continue
+            lits = []
+            for pk in part_keys[r.name]:
+                for tag, (var, val) in {
+                    "W": (x1[pk], 0), "E": (x2[pk], W),
+                    "S": (y1[pk], 0), "N": (y2[pk], H),
+                }.items():
+                    lit = m.new_bool_var(f"door_ext_{pk}_{tag}")
+                    m.add(var == val).only_enforce_if(lit)
+                    lits.append(lit)
+                for hn in hallway_set:
+                    for hk in part_keys.get(hn, []):
+                        lits += _touch_cases(m, W, H, x1, x2, y1, y2, pk, hk,
+                                              door_width, f"door_{pk}_{hk}")
+            m.add_bool_or(lits)
+
+    # ------------------------------------------------------------------
+    # objective: hit the area program as closely as possible, plus opt-in
+    # soft terms (all default to weight 0 -- a no-op unless a caller passes
+    # a nonzero weight)
     # ------------------------------------------------------------------
     devs = []
     for r in rooms:
@@ -354,7 +493,68 @@ def solve(footprint: Footprint,
         m.add(d >= tarea[r.name] - r.target_area)
         m.add(d >= r.target_area - tarea[r.name])
         devs.append(d)
-    m.minimize(sum(devs))
+    objective = sum(devs)
+
+    # soft aspect ratio: penalize a part's long side exceeding 3x its short
+    # side, in whole feet of excess. A room whose own hard max_aspect is
+    # already <= 3.0 (most bedrooms/baths/living rooms) never triggers this --
+    # it only bites rooms with a looser per-room cap (Hall's 8.0, a closet's
+    # 3.0+) that would otherwise have no reason to stay under 3:1.
+    if aspect_penalty_weight > 0:
+        aspect_viol = []
+        for pk in all_pks:
+            viol = m.new_int_var(0, max(W, H), f"aspect_viol_{pk}")
+            m.add(viol >= w[pk] - 3 * h[pk])
+            m.add(viol >= h[pk] - 3 * w[pk])
+            aspect_viol.append(viol)
+        objective += aspect_penalty_weight * sum(aspect_viol)
+
+    # soft compactness: penalize a part's half-perimeter (w+h). True
+    # perimeter/area is nonlinear (division); since each room's area is
+    # already held near its target by the deviation term above, penalizing
+    # raw half-perimeter is an adequate linear proxy for the same thing --
+    # for near-fixed area, minimizing w+h is exactly minimizing perimeter,
+    # which is minimized (for a rectangle) at w==h. Applies per-part, so a
+    # multi-part (L/T/U) room's extra seam also costs something -- it only
+    # pays for that shape when parts=2+ has no cheaper alternative, which
+    # matches "extra jogs only appear when they help."
+    if compactness_weight > 0:
+        objective += compactness_weight * sum(w[pk] + h[pk] for pk in all_pks)
+
+    # soft alignment: minimize the number of distinct x/y wall lines actually
+    # used across the plan (see _guideline_usage) -- a continuous wall line
+    # running through several rooms is preferred over one that jogs for no
+    # other reason. A covering objective, not a pairwise one -- see
+    # _guideline_usage's docstring for why that distinction is the whole
+    # point.
+    if alignment_weight > 0:
+        x_edges = [(pk, x1[pk]) for pk in all_pks] + [(pk, x2[pk]) for pk in all_pks]
+        y_edges = [(pk, y1[pk]) for pk in all_pks] + [(pk, y2[pk]) for pk in all_pks]
+        used_x = _guideline_usage(m, W, x_edges, "align_x")
+        used_y = _guideline_usage(m, H, y_edges, "align_y")
+        objective += alignment_weight * (sum(used_x) + sum(used_y))
+
+    # soft proximity: penalize Manhattan distance between two rooms' centroids
+    # (doubled -- x1+x2 instead of (x1+x2)/2 -- to stay integer; only a 2x
+    # scale on the weight, doesn't change what's optimal). Uses each room's
+    # part 0 as its centroid stand-in, which is exact for single-part rooms
+    # and an adequate approximation for a multi-part (L/T/U) one.
+    if proximity and proximity_weight > 0:
+        prox_terms = []
+        for pr in proximity:
+            ka, kb = part_keys[pr.a][0], part_keys[pr.b][0]
+            dx = m.new_int_var(-2 * W, 2 * W, f"prox_dx_{pr.a}_{pr.b}")
+            dy = m.new_int_var(-2 * H, 2 * H, f"prox_dy_{pr.a}_{pr.b}")
+            m.add(dx == (x1[ka] + x2[ka]) - (x1[kb] + x2[kb]))
+            m.add(dy == (y1[ka] + y2[ka]) - (y1[kb] + y2[kb]))
+            adx = m.new_int_var(0, 2 * W, f"prox_adx_{pr.a}_{pr.b}")
+            ady = m.new_int_var(0, 2 * H, f"prox_ady_{pr.a}_{pr.b}")
+            m.add_abs_equality(adx, dx)
+            m.add_abs_equality(ady, dy)
+            prox_terms.append(adx + ady)
+        objective += proximity_weight * sum(prox_terms)
+
+    m.minimize(objective)
 
     s = cp_model.CpSolver()
     s.parameters.max_time_in_seconds = time_limit
@@ -363,7 +563,13 @@ def solve(footprint: Footprint,
     status = s.solve(m)
 
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        return None, s.status_name(status)
+        # no incumbent -- s.objective_value/best_objective_bound silently
+        # return 0.0 here rather than raising, which would misreport as a
+        # real objective of zero, so report None instead. wall_time is still
+        # meaningful either way: it's what tells a caller whether this was a
+        # fast proof of INFEASIBLE or a full time_limit burned with nothing
+        # to show for it.
+        return None, s.status_name(status), None, None, s.wall_time
 
     plan = {}
     for r in rooms:
@@ -375,7 +581,7 @@ def solve(footprint: Footprint,
             for pk in part_keys[n]
         ]
         plan[n] = dict(parts=parts_out, area=s.value(tarea[n]), target=r.target_area)
-    return plan, s.status_name(status)
+    return plan, s.status_name(status), s.objective_value, s.best_objective_bound, s.wall_time
 
 
 # ----------------------------------------------------------------------

@@ -34,7 +34,7 @@ cross-zone doorway that anchor was trying to win.
 """
 
 from dataclasses import replace
-from typing import Dict, List, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 from layout import Room, Adj, Footprint, solve, shared_walls
 
@@ -46,11 +46,22 @@ def solve_zoned(footprint: Footprint,
                  split_axis: str = "x",
                  time_limit: float = 30.0,
                  seed: int = 0,
-                 workers: int = 8):
+                 workers: int = 8,
+                 hallways: Optional[Iterable[str]] = None,
+                 private: Optional[Iterable[str]] = None):
     """zone_of: {room_name: zone_name}, exactly two distinct zone names,
     covering every room in `rooms`. split_axis: "x" splits the footprint
     into a west zone (alphabetically first zone name) and an east zone;
     "y" splits into south/north the same way.
+
+    hallways/private: passed through to each zone's own solve() call (see
+    its docstring), filtered down to just the names present in that zone --
+    a zone with no hallway room in it falls back to requiring plain exterior
+    touch for every non-private room in that zone, same as if hallways were
+    omitted. A cross-zone hallway (the common case: the hallway lives in one
+    zone, a room needing it lives in the other) can't be satisfied this way,
+    same limitation as any other cross-zone adjacency -- keep hallway rooms
+    and everything that needs them in the same zone.
 
     Returns (plan, status, cross_report). plan/status match solve()'s
     return shape (plan is None on failure, status names which zone failed
@@ -141,15 +152,27 @@ def solve_zoned(footprint: Footprint,
     intra_a = [ad for ad in intra if zone_of[ad.a] == zone_a]
     intra_b = [ad for ad in intra if zone_of[ad.a] == zone_b]
 
+    all_hallways = set(hallways or ())
+    all_private = set(private or ())
+
     def solve_zone(fp_zone, zone_rooms, zone_adj):
-        plan, status = solve(fp_zone, anchored(zone_rooms), zone_adj,
-                              time_limit=time_limit, seed=seed, workers=workers)
+        # solve() also returns (objective_value, best_objective_bound,
+        # wall_time) per zone now -- not surfaced through solve_zoned()'s own
+        # return yet (unchanged 3-tuple below), discarded here for now.
+        zone_names = {r.name for r in zone_rooms}
+        zone_hallways = all_hallways & zone_names
+        zone_private = all_private & zone_names
+        plan, status, _, _, _ = solve(fp_zone, anchored(zone_rooms), zone_adj,
+                                       time_limit=time_limit, seed=seed, workers=workers,
+                                       hallways=zone_hallways, private=zone_private)
         if plan:
             return plan, status
         # the cross-zone anchor(s) may be what made this infeasible -- retry
         # without them rather than failing a zone that's solvable on its own
-        return solve(fp_zone, zone_rooms, zone_adj,
-                      time_limit=time_limit, seed=seed, workers=workers)
+        plan, status, _, _, _ = solve(fp_zone, zone_rooms, zone_adj,
+                                       time_limit=time_limit, seed=seed, workers=workers,
+                                       hallways=zone_hallways, private=zone_private)
+        return plan, status
 
     plan_a, status_a = solve_zone(fp_a, rooms_by_zone[zone_a], intra_a)
     if not plan_a:

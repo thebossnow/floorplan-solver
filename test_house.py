@@ -35,8 +35,9 @@ rooms, adj = add_closets(rooms, adj, ["Primary", "Bed2"], area=22, min_dim=3, ma
 
 
 t = time.time()
-plan, status = solve(fp, rooms, adj, time_limit=60)
-print(f"status={status}  {time.time()-t:.1f}s")
+plan, status, objective_value, best_objective_bound, wall_time = solve(fp, rooms, adj, time_limit=60)
+print(f"status={status}  {time.time()-t:.1f}s  "
+      f"objective={objective_value}  bound={best_objective_bound}  solve_wall_time={wall_time:.1f}s")
 
 if plan:
     tot = 0

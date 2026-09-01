@@ -19,7 +19,7 @@ from datetime import date
 
 from flask import Flask, render_template, request
 
-from generator import (MAX_AREA, MAX_BATHS, MAX_BEDS, MIN_AREA, STYLES,
+from generator import (HALLWAYS, MAX_AREA, MAX_BATHS, MAX_BEDS, MIN_AREA, STYLES,
                         generate_program, shelf_pack_hint, zone_of_program)
 from layout import FILL_BY_KIND, circulation_ok, display_name, place_openings, room_kind, solve, to_svg
 from zoning import solve_zoned
@@ -82,19 +82,28 @@ def index():
 
             zoned = len(rooms) > ZONE_ROOM_THRESHOLD
             cross = None
+            objective_value = best_objective_bound = None  # solve_zoned() doesn't expose these yet
             t0 = time.time()
             if zoned:
                 zone_of = zone_of_program(rooms)
                 plan, status, cross = solve_zoned(
-                    fp, rooms, adj, zone_of, time_limit=ZONE_TIME_LIMIT, workers=8)
+                    fp, rooms, adj, zone_of, time_limit=ZONE_TIME_LIMIT, workers=8,
+                    hallways=HALLWAYS, private=private)
             else:
                 hint = shelf_pack_hint(fp, rooms)
-                plan, status = solve(fp, rooms, adj, time_limit=TIME_LIMIT, workers=8, hint=hint)
+                plan, status, objective_value, best_objective_bound, solver_wall_time = solve(
+                    fp, rooms, adj, time_limit=TIME_LIMIT, workers=8, hint=hint,
+                    hallways=HALLWAYS, private=private)
             elapsed = time.time() - t0
 
             if not plan:
                 budget = f"{2*ZONE_TIME_LIMIT:.0f}s" if zoned else f"{TIME_LIMIT:.0f}s"
-                error = (f"No layout found ({status}) within {budget}. "
+                # solve()'s own wall_time (vs. this request's outer elapsed)
+                # tells the difference between "burned the whole time_limit
+                # with no incumbent" and "failed fast" (e.g. a quick proof of
+                # INFEASIBLE) -- only available on the unzoned path today.
+                timing = f"{solver_wall_time:.1f}s" if not zoned else f"{elapsed:.1f}s"
+                error = (f"No layout found ({status}) after {timing}, within a {budget} budget. "
                          "Try a larger area, fewer bedrooms/bathrooms, or a different shape.")
             else:
                 openings = place_openings(plan, fp, adj, rooms)
@@ -117,6 +126,8 @@ def index():
                     zoned=zoned,
                     cross=cross,
                     elapsed=round(elapsed, 1),
+                    objective_value=objective_value,
+                    best_objective_bound=best_objective_bound,
                     footprint=f'{fp.width} x {fp.height} ft ({fp.area()} sf)',
                     total=sum(r["area"] for r in plan.values()),
                     circulation_ok=ok,
