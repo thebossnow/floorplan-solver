@@ -118,6 +118,27 @@ class Footprint:
         return a
 
 
+@dataclass
+class InfeasibilityDiagnosis:
+    """Which hard-rule literals were part of a sufficient assumption core
+    when solve(diagnose_infeasibility=True) proves INFEASIBLE -- see
+    solve()'s own docstring. conflicting_rules is a sorted list of rule
+    ids ("{kind}:{entity}", e.g. "adjacency:Hall:Bed2"); message is a
+    ready-to-display sentence.
+
+    Defined HERE, not in rules.py, despite V2-ALPHA-PLAN.md's Architecture
+    section listing it under rules.py: layout.py must construct instances
+    of it directly inside solve(), and stays import-free from every other
+    project module (see this file's own module docstring -- generator.py/
+    zoning.py import *from* layout.py, never the reverse; a rules.py
+    import here would break that). rules.py (Phase 4) re-exports this via
+    `from layout import InfeasibilityDiagnosis` instead of redefining it,
+    so `from rules import InfeasibilityDiagnosis` still works for callers
+    that only know about rules.py."""
+    conflicting_rules: List[str]
+    message: str
+
+
 def _min_dim_floor(name: str) -> Optional[int]:
     """Type-based minimum-dimension floor for validate_program()'s guardrail:
     bedrooms >= 4ft, closets >= 2ft, bathrooms >= 5ft (8/4/10 grid-units),
@@ -342,7 +363,9 @@ def solve(footprint: Footprint,
           alignment_weight: int = 0,
           no_improvement_timeout: Optional[float] = None,
           proximity: Optional[List[Proximity]] = None,
-          proximity_weight: int = 0):
+          proximity_weight: int = 0,
+          diagnose_infeasibility: bool = False,
+          diagnosis_out: Optional[List["InfeasibilityDiagnosis"]] = None):
     """Returns (plan, status, objective_value, best_objective_bound,
     wall_time). plan is None when status isn't OPTIMAL/FEASIBLE, and
     objective_value/best_objective_bound are None along with it (CP-SAT
@@ -387,9 +410,30 @@ def solve(footprint: Footprint,
     CpSolver.parameters.log_search_progress (see HANDOFF/README) before
     picking a value -- this only helps when the primal itself plateaus
     early; a search that hasn't found *any* incumbent yet has nothing for
-    this to detect."""
+    this to detect.
+
+    diagnose_infeasibility: opt-in, default False = today's exact model
+    (tight w/h/area domains, plain hard constraints, zero extra
+    variables/overhead). When True, four existing per-entity/per-part
+    hard rules -- adjacency, exterior daylight, door access, and min room
+    dimension -- are each wrapped behind their own CP-SAT assumption
+    literal (rule id "{kind}:{entity}", e.g. "adjacency:Hall:Bed2",
+    "min_dim:{part_key}") instead of being unconditional, so that if the
+    solve comes back INFEASIBLE, a second single-worker re-solve against
+    the same model can call sufficient_assumptions_for_infeasibility() to
+    identify which specific rule(s) are in conflict, appended to
+    diagnosis_out (a caller-provided list, same opt-in out-parameter
+    pattern as hint/proximity -- existing callers that don't pass this
+    see zero behavior change) as an InfeasibilityDiagnosis. The returned
+    core is *sufficient*, not *minimal* -- it may name more rules than
+    are strictly necessary to explain the conflict; shrinking it is
+    deferred future work (each shrink attempt costs a full re-solve).
+    Zoned solves (zoning.solve_zoned()) don't support this -- diagnosis
+    is unzoned-only for now, zoning's own anchor/retry logic has a
+    separate failure-attribution story."""
 
     validate_program(footprint, rooms, adjacencies, hallways, private, proximity)
+    lit_index_to_rule: Dict[int, str] = {}
 
     W, H = footprint.width, footprint.height
     m = cp_model.CpModel()
@@ -411,9 +455,24 @@ def solve(footprint: Footprint,
             x2[pk] = m.new_int_var(0, W, f"{pk}_x2")
             y1[pk] = m.new_int_var(0, H, f"{pk}_y1")
             y2[pk] = m.new_int_var(0, H, f"{pk}_y2")
-            w[pk] = m.new_int_var(r.min_dim, W, f"{pk}_w")
-            h[pk] = m.new_int_var(r.min_dim, H, f"{pk}_h")
-            area[pk] = m.new_int_var(part_lo, hi, f"{pk}_a")
+            if diagnose_infeasibility:
+                # widened domains (floor of 1, not min_dim/part_lo) so the
+                # min_dim requirement itself can be relaxed via its own
+                # assumption literal below, instead of being baked into
+                # the variable domain where no literal could ever turn it
+                # off for diagnosis
+                w[pk] = m.new_int_var(1, W, f"{pk}_w")
+                h[pk] = m.new_int_var(1, H, f"{pk}_h")
+                area[pk] = m.new_int_var(1, hi, f"{pk}_a")
+                min_dim_lit = m.new_bool_var(f"rule_min_dim_{pk}")
+                m.add(w[pk] >= r.min_dim).only_enforce_if(min_dim_lit)
+                m.add(h[pk] >= r.min_dim).only_enforce_if(min_dim_lit)
+                m.add_assumption(min_dim_lit)
+                lit_index_to_rule[min_dim_lit.index] = f"min_dim:{pk}"
+            else:
+                w[pk] = m.new_int_var(r.min_dim, W, f"{pk}_w")
+                h[pk] = m.new_int_var(r.min_dim, H, f"{pk}_h")
+                area[pk] = m.new_int_var(part_lo, hi, f"{pk}_a")
 
             xiv[pk] = m.new_interval_var(x1[pk], w[pk], x2[pk], f"{pk}_xi")
             yiv[pk] = m.new_interval_var(y1[pk], h[pk], y2[pk], f"{pk}_yi")
@@ -480,7 +539,13 @@ def solve(footprint: Footprint,
         for pa in part_keys[a]:
             for pb in part_keys[b]:
                 cases += _touch_cases(m, W, H, x1, x2, y1, y2, pa, pb, L, f"adj_{pa}_{pb}")
-        m.add_bool_or(cases)
+        if diagnose_infeasibility:
+            rule_lit = m.new_bool_var(f"rule_adjacency_{a}_{b}")
+            m.add_bool_or(cases).only_enforce_if(rule_lit)
+            m.add_assumption(rule_lit)
+            lit_index_to_rule[rule_lit.index] = f"adjacency:{a}:{b}"
+        else:
+            m.add_bool_or(cases)
 
     # ------------------------------------------------------------------
     # daylight: room must touch the outer boundary (any one part suffices)
@@ -497,7 +562,13 @@ def solve(footprint: Footprint,
                 lit = m.new_bool_var(f"ext_{pk}_{tag}")
                 m.add(var == val).only_enforce_if(lit)
                 lits.append(lit)
-        m.add_bool_or(lits)
+        if diagnose_infeasibility:
+            rule_lit = m.new_bool_var(f"rule_daylight_{r.name}")
+            m.add_bool_or(lits).only_enforce_if(rule_lit)
+            m.add_assumption(rule_lit)
+            lit_index_to_rule[rule_lit.index] = f"daylight:{r.name}"
+        else:
+            m.add_bool_or(lits)
 
     # ------------------------------------------------------------------
     # door access: every non-private, non-hallway room must reach the
@@ -523,7 +594,13 @@ def solve(footprint: Footprint,
                     for hk in part_keys.get(hn, []):
                         lits += _touch_cases(m, W, H, x1, x2, y1, y2, pk, hk,
                                               door_width, f"door_{pk}_{hk}")
-            m.add_bool_or(lits)
+            if diagnose_infeasibility:
+                rule_lit = m.new_bool_var(f"rule_door_access_{r.name}")
+                m.add_bool_or(lits).only_enforce_if(rule_lit)
+                m.add_assumption(rule_lit)
+                lit_index_to_rule[rule_lit.index] = f"door_access:{r.name}"
+            else:
+                m.add_bool_or(lits)
 
     # ------------------------------------------------------------------
     # objective: hit the area program as closely as possible, plus opt-in
@@ -637,6 +714,28 @@ def solve(footprint: Footprint,
         # meaningful either way: it's what tells a caller whether this was a
         # fast proof of INFEASIBLE or a full time_limit burned with nothing
         # to show for it.
+        if diagnose_infeasibility and status == cp_model.INFEASIBLE and diagnosis_out is not None:
+            # Re-solve once more, single-worker, against the SAME model (its
+            # assumptions are already baked in via add_assumption() above --
+            # a model's constraints/assumptions live on the CpModel, not the
+            # solver, so a fresh CpSolver instance still sees them). Cheap
+            # insurance paid only on this failure path: no confirmed single-
+            # worker requirement for sufficient_assumptions_for_infeasibility()
+            # was found in OR-Tools docs, and an empirical toy-model test
+            # worked fine at workers=8, but this is untested at production
+            # complexity, so pay for the guaranteed-safe path rather than
+            # assume.
+            s2 = cp_model.CpSolver()
+            s2.parameters.max_time_in_seconds = time_limit
+            s2.parameters.num_workers = 1
+            s2.parameters.random_seed = seed
+            status2 = s2.solve(m)
+            if status2 == cp_model.INFEASIBLE:
+                core = s2.sufficient_assumptions_for_infeasibility()
+                rule_ids = sorted({lit_index_to_rule[i] for i in core if i in lit_index_to_rule})
+                message = (f"These rules conflict: {', '.join(rule_ids)}." if rule_ids else
+                           "Infeasible, but the conflicting rules could not be identified.")
+                diagnosis_out.append(InfeasibilityDiagnosis(conflicting_rules=rule_ids, message=message))
         return None, s.status_name(status), None, None, s.wall_time
 
     plan = {}
