@@ -11,8 +11,16 @@ This came out of a design review: splitting the solver into `solve_program()`/`v
 - **Python-only scope.** Eve integration and real per-jurisdiction building-code data are explicit future work, not this plan.
 - Jurisdictions: one stub ruleset, `generic-residential`.
 - Units: integer inches quantized to a 6" grid (not literal 1"), modeled as "grid-units of 6 inches" — v1's feet-resolution model already has a documented, separately-tracked search-reliability gap at large footprints; full 1" domains would make that worse.
-- Rule content: hard rules = min room dimension, hall clear width, setback envelope, garage separation (plus v1's existing per-entity hard rules, once wired for diagnosis); soft = an adjacency-matrix term as a guideline-covering objective (reusing v1's `alignment_weight` reformulation, not naive pairwise sums); validators = egress opening, door swing conflicts, fixture clearance, furniture fit.
-- **v1 is being actively developed in parallel** (a concurrent, uncommitted change on `master` replaces the shape enum with a continuous width slider — `WIDTH_ASPECT_MAX`, `WIDTH_MIN_SIDE`, `width_bounds()`, `generate_program(..., width=...)`). v2-alpha builds on this: the new `ProgramSpec` takes a `width`, not a shape choice.
+- Rule content: hard rules = min room dimension, hall clear width, setback envelope, closet alignment (plus v1's existing per-entity hard rules, once wired for diagnosis); soft = an adjacency-matrix term as a guideline-covering objective (reusing v1's `alignment_weight` reformulation, not naive pairwise sums); validators = egress opening, door swing conflicts, fixture clearance, furniture fit. **Garage separation is dropped from this pass** (see sign-off #3/#4 below) — `generator.py` doesn't produce a Garage room at all yet, so there's nothing for the rule to constrain; revisit once/if garage generation exists.
+- **Three more rules added 2026-09-02** (user review, before implementation started — see "Additional rules" section below for full detail): an optional-entry program variant, a closet-alignment hard rule, and a hallway-door-placement fix to `place_openings()`. The latter two land as originally planned; optional-entry is a `generator.py`/`ProgramSpec` option, not a CP-SAT rule.
+- **v1's width slider has since landed**: the shape enum was replaced with a continuous width slider (`WIDTH_ASPECT_MAX`, `WIDTH_MIN_SIDE`, `width_bounds()`, `generate_program(..., width=...)`), committed to `master`, and is now live in production — `metawhalealerts.com`/`www.metawhalealerts.com` were cut over from the old VPS to this same Vercel project on 2026-09-02 (VPS left running, untouched, as a rollback fallback). v2-alpha builds on this: the new `ProgramSpec` takes a `width`, not a shape choice.
+
+## Additional rules (added 2026-09-02, user review before implementation started)
+
+Three rules came out of a plan review, after the original "Decisions locked in" above. Closet alignment is folded into "Net-new hard rules" below (it's genuine `rules.py` content). The other two aren't CP-SAT rules at all — noted here since they don't fit neatly under `rules.py`:
+
+- **Optional entry**: today `generator.py` always includes a separate `Entry` room in both styles (`STYLES["traditional"|"open_concept"]["pcts"]["Entry"]`). New `ProgramSpec` field `has_entry: bool = True`; when `False`, `Entry`'s `pcts`/`floors` allocation is dropped from the style mix entirely, and the daylight/door-access requirements that would've attached to `Entry` move to whichever room the style treats as the arrival space (`Living` for `traditional`, `Great` for `open_concept`) instead — the front door opens directly into it. This is a program-generation choice, not a solvability constraint, so it lands in `generator.py` (modified in place, same treatment as `layout.py` — see Architecture below) and threads through `orchestrate.ProgramSpec` alongside `width`. Natural home: Phase 2, alongside `ProgramSpec`'s definition.
+- **Hallway door placement**: `layout.place_openings()` currently draws exactly one door per `Adj`, uniformly — including e.g. `Adj("Living", "Hall")`. The correct rule: a door belongs where a hallway meets a **private** room (bedroom, bath), not where it meets a **public** room (Living/Great) — the latter is an open threshold, no door drawn. Fix is a filter in `place_openings()`'s adjacency loop, keyed off `room_kind()`'s existing living/hall/sleep/wet/closet classification (already imported by `app.py` today) — skip door placement when one side is `"hall"` and the other is `"living"`. **Not a CP-SAT rule** — doors aren't solve-time variables, so this is pure post-solve geometry, same category as `circulation_ok()`. **Consequence worth flagging**: `place_openings()` lives in `layout.py`, shared by both v1's live `_run_solve()` and v2's `render_svg()` wrapper. Since `v2-alpha` isn't merging to `master` on any defined timeline (see Branch/workflow below), production keeps drawing the extra hallway-threshold door until v2-alpha ships — decided anyway (folded into v2 rather than cherry-picked into `master` now), noted here so it's not a surprise later. Natural home: Phase 2, alongside the `render_svg()` wrapper.
 
 ## Architecture
 
@@ -55,7 +63,10 @@ New `solve()` params: `ruleset: Optional[Ruleset] = None`, `diagnose_infeasibili
 **Net-new hard rules** (gated on `ruleset is not None`, in `rules.py`):
 - **Hall clear width**: reuses the widened w/h domains from the min-dim fix; per hallway-room part, `m.add(w[pk] >= ruleset.hall_clear_width).only_enforce_if(lit)`.
 - **Setback envelope**: `(room, edge, distance)` triples — per-edge inequality on `x1`/`x2`/`y1`/`y2`. **Open design point**: modeled as an explicit per-room/per-edge list (e.g. "Garage sets back from its front edge"), not a uniform inward margin — a uniform margin would conflict with the existing daylight rule's "must touch the boundary" semantics.
-- **Garage separation**: the exact-partition model (every square inch belongs to some room) makes a true minimum *gap* unrepresentable without buffer rooms; this lands as a **non-adjacency** constraint instead (`_touch_cases` literals all forced false) — a real, disclosed scope limit, not glossed over. `generator.py` does not gain garage-producing logic in this pass; test via hand-built `Room`/`Footprint` fixtures (same style as `test_house.py`).
+- **Closet alignment** (added 2026-09-02, user review): a bedroom's closet should (a) match its parent bedroom's own width, and (b) sit on the wall opposite the bedroom's door. Both are real CP-SAT constraints, no post-solve validator needed:
+  - *Width match*: `add_closets()` already glues the closet to its bedroom as a separate part sharing an edge (see `layout.py`'s multi-part-room machinery) — add `m.add(w[closet_pk] == w[bedroom_pk]).only_enforce_if(lit)` (or the `h` pair, whichever axis the shared glue-edge runs along), rule id `"closet_align_width:{bedroom}"`.
+  - *Away from the door*: door position itself isn't a solve-time variable (`place_openings()` runs post-solve — see the hallway-door item below), so "the door entry wall" is modeled as **the wall shared with the bedroom's own Hall adjacency** — the wall a door will actually get drawn on. Constrain the closet's glue-edge side to be a *different* side than the Hall-shared side, using the existing shared-wall-side (`_touch_cases`-style) literals. Rule id `"closet_align_position:{bedroom}"`. Needs the bedroom to actually have a Hall adjacency to anchor against — for a bedroom with no Hall adjacency (shouldn't happen given `HALLWAYS`/door-access wiring, but worth an assertion) this rule has nothing to compare against and should no-op rather than error.
+- ~~**Garage separation**~~ — **dropped from this pass** (sign-off #3/#4, decided before implementation started): `generator.py` has no Garage room at all today, so there's no real program to constrain yet. The exact-partition-model problem (every square inch belongs to some room, so a true minimum *gap* is unrepresentable without buffer rooms) is real and would still apply whenever this is picked back up — a non-adjacency constraint (`_touch_cases` literals forced false) rather than true distance, same disclosed limit as before, just not built now against a nonexistent room type.
 
 **Deliberately scoped OUT of diagnosis** (stay real hard constraints, just outside the mechanism): `add_no_overlap_2d` and the exact-partition constraint — both are single global constraints across all rooms, and in practice are essentially never the actual cause of infeasibility once `validate_program()`'s pre-solve area check has passed.
 
@@ -104,16 +115,16 @@ Rendering fixes needed (`layout.to_svg()`): halve `scale=14` to ~7 (px-per-grid-
 
 No collision with v1's existing `/` or `/solve` (browser-fetch, HTML-in-JSON) routes; `vercel.json`'s catch-all rewrite already covers any new path.
 
-- **`POST /api/solve`** — `{total_area, beds, baths, width, style, ruleset, time_limit, diagnose_infeasibility}` in (width replaces shape as the primary footprint control, per the concurrent v1 work). Success: `{ok, status, plan, footprint, objective_value, best_objective_bound, wall_time, zoned, program}` — `program` is the serialized spec, included so `/api/validate` can be called independently without the caller reconstructing it. Infeasible: `{ok: false, status, diagnosis: {conflicting_rules, message}}`.
+- **`POST /api/solve`** — `{total_area, beds, baths, width, has_entry, style, ruleset, time_limit, diagnose_infeasibility}` in (width replaces shape as the primary footprint control, per v1's width-slider work; `has_entry` defaults `true`, matching today's always-Entry behavior). Success: `{ok, status, plan, footprint, objective_value, best_objective_bound, wall_time, zoned, program}` — `program` is the serialized spec, included so `/api/validate` can be called independently without the caller reconstructing it. Infeasible: `{ok: false, status, diagnosis: {conflicting_rules, message}}`.
 - **`POST /api/validate`** — `{plan, footprint, rooms, adjacencies, ruleset}` in → `{ok, circulation_ok, unreachable, findings}` out.
 - **`GET /api/jurisdictions`** — `{jurisdictions: [{id: "generic-residential", name: "Generic Residential (stub)"}]}`.
 
 ## Phased sequencing (each independently testable, plain `assert`/`print` style matching existing `test_*.py`)
 
 1. **Units migration** — generator.py + layout.py defaults + the 4 rendering fixes. Structural-diff test against pre-migration output.
-2. **Three-stage split, v1 rule content unchanged** — `orchestrate.py`, `validators.py` skeleton (existing checks only). Rename the `test_production_shapes.py` helper here. New `test_orchestrate.py`.
+2. **Three-stage split, v1 rule content unchanged** — `orchestrate.py`, `validators.py` skeleton (existing checks only). Rename the `test_production_shapes.py` helper here. New `test_orchestrate.py`. Also carries the two non-CP-SAT rules from the 2026-09-02 review: `ProgramSpec.has_entry` in `generator.py`/`orchestrate.py`, and the hallway-door-placement filter in `place_openings()`.
 3. **Assumption-literal wiring on existing per-entity rules + min-dim restructuring** — `diagnose_infeasibility`/`diagnosis_out`, single-worker retry, rule-id mapping. New `test_diagnosis.py` with a deliberately-conflicting hand-built program.
-4. **Four new hard rules** in the `generic-residential` stub. New `test_hard_rules.py` (one infeasible + one feasible case per rule).
+4. **Three new hard rules** (hall clear width, setback envelope, closet alignment — garage separation dropped, see sign-off #3/#4) in the `generic-residential` stub. New `test_hard_rules.py` (one infeasible + one feasible case per rule).
 5. **Four post-solve validators** + `fixtures.py`. New `test_validators.py`, reusing `test_house.py`'s program.
 6. **Adjacency-matrix soft objective**. New `test_adjacency_objective.py` (weight=0 no-op + weight>0 measurable effect).
 7. **JSON API routes** — `serialize.py`, `api_routes.py`. New `test_api.py` via Flask's test client, including a full INFEASIBLE→diagnosis round-trip through JSON.
@@ -126,13 +137,15 @@ Validators (5) are independent of diagnosis/hard-rules (3/4) and could be built 
 
 ## Open design choices flagged for sign-off (not silently picked where genuinely close)
 
-1. Diagnosis via out-parameter vs. 6-tuple + updating all call sites — recommended: out-parameter.
-2. Setback as per-room/edge list vs. uniform margin — recommended: per-room/edge (uniform conflicts with the daylight rule).
-3. Garage separation as "no shared wall" vs. true minimum distance — recommended: no-shared-wall (fits the exact-partition model); true distance is future work.
-4. Should `generator.py` gain a Garage-producing option now — recommended: no, hand-built fixtures only.
-5. Minimal-core shrinking — recommended: defer as documented follow-up.
-6. `AdjPref` global-weight-only vs. per-pair weight — recommended: global (parity with `Proximity`).
-7. New routes as a Blueprint (`api_routes.py`) vs. directly in `app.py` — recommended: Blueprint.
+Signed off 2026-09-02, before implementation started. Items 1-2 and 5-7 accepted as recommended (no discussion needed); 3-4 changed from the original recommendation after review:
+
+1. Diagnosis via out-parameter vs. 6-tuple + updating all call sites — **accepted: out-parameter.**
+2. Setback as per-room/edge list vs. uniform margin — **accepted: per-room/edge** (uniform conflicts with the daylight rule).
+3. Garage separation as "no shared wall" vs. true minimum distance — **superseded: dropped from this pass entirely**, not just weakened to no-shared-wall. `generator.py` doesn't produce a Garage room at all yet, so neither semantics has a real program to apply to. Revisit both this choice and garage generation together, whenever garage support is actually added.
+4. Should `generator.py` gain a Garage-producing option now — **decided: no** — consistent with #3, garage support (generation *and* the separation rule) is deferred as a unit, not split across passes.
+5. Minimal-core shrinking — **accepted: defer** as documented follow-up.
+6. `AdjPref` global-weight-only vs. per-pair weight — **accepted: global** (parity with `Proximity`).
+7. New routes as a Blueprint (`api_routes.py`) vs. directly in `app.py` — **accepted: Blueprint.**
 
 ## Verification (when implementation starts)
 
