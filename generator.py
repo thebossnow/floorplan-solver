@@ -118,7 +118,40 @@ def shelf_pack_hint(footprint: Footprint, rooms: List[Room]) -> Dict[str, Tuple[
     return hint
 
 
-def make_footprint(total_area: int, shape: str = "rectangular", aspect: float = 1.4) -> Footprint:
+# v1 prototype guard for the width slider (see templates/index.html) --
+# not a real feasibility check (that's the "v2 alpha" rules-engine's job,
+# see [[floorplan-solver-v2-alpha]]) -- just keeps the slider inside a
+# range CP-SAT is actually likely to solve within TIME_LIMIT, instead of
+# shipping a control that silently times out at its own extremes (e.g. a
+# 250x10 footprint: almost every room's min_dim is too wide to fit across
+# a 10ft strip).
+WIDTH_ASPECT_MAX = 2.5   # long side : short side
+WIDTH_MIN_SIDE = 20      # ft -- comfortably above the widest room min_dim
+                         # (Great, 14ft) plus margin for halls/walls
+
+
+def width_bounds(total_area: int) -> Tuple[int, int]:
+    """Usable (lo, hi) range for the width slider at a given area -- both
+    footprint dimensions stay >= WIDTH_MIN_SIDE and the aspect ratio stays
+    <= WIDTH_ASPECT_MAX, whichever is tighter. Mirrored in
+    templates/index.html's JS so the slider's min/max can update live as
+    the area slider moves, without a server round-trip."""
+    lo = max(round((total_area / WIDTH_ASPECT_MAX) ** 0.5), WIDTH_MIN_SIDE)
+    hi = min(round((total_area * WIDTH_ASPECT_MAX) ** 0.5),
+             max(total_area // WIDTH_MIN_SIDE, WIDTH_MIN_SIDE))
+    if lo > hi:
+        mid = round(total_area ** 0.5)
+        return mid, mid
+    return lo, hi
+
+
+def make_footprint(total_area: int, shape: str = "rectangular", aspect: float = 1.4,
+                    width: int = None) -> Footprint:
+    if width is not None:
+        lo, hi = width_bounds(total_area)
+        width = max(lo, min(width, hi))
+        height = max(round(total_area / width), 15)
+        return Footprint(width=width, height=height)
     if shape == "square":
         side = max(round(total_area ** 0.5), 15)
         return Footprint(width=side, height=side)
@@ -128,15 +161,18 @@ def make_footprint(total_area: int, shape: str = "rectangular", aspect: float = 
 
 
 def generate_program(total_area: int, beds: int = 3, baths: int = 2,
-                      shape: str = "rectangular", style: str = "traditional"):
-    """Returns (footprint, rooms, adjacencies, private_room_names)."""
+                      shape: str = "rectangular", style: str = "traditional",
+                      width: int = None):
+    """Returns (footprint, rooms, adjacencies, private_room_names). `width`
+    (ft), when given, overrides `shape`/`aspect` entirely -- see
+    make_footprint()."""
     if style not in STYLES:
         raise ValueError(f"unknown style {style!r}; choose from {sorted(STYLES)}")
     beds = max(1, min(beds, MAX_BEDS))
     baths = max(1, min(baths, MAX_BATHS))
     style_cfg = STYLES[style]
 
-    fp = make_footprint(total_area, shape)
+    fp = make_footprint(total_area, shape, width=width)
     F = fp.area()
 
     pcts = dict(style_cfg["pcts"])

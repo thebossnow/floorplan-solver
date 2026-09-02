@@ -21,8 +21,9 @@ from datetime import date
 from flask import Flask, jsonify, render_template, request
 
 from generator import (HALLWAYS, MAX_AREA, MAX_BATHS, MAX_BEDS, MIN_AREA, PRODUCTION_WEIGHTS,
-                        STYLES, ZONE_ROOM_THRESHOLD, default_proximity, generate_program,
-                        shelf_pack_hint, zone_of_program)
+                        STYLES, WIDTH_ASPECT_MAX, WIDTH_MIN_SIDE, ZONE_ROOM_THRESHOLD,
+                        default_proximity, generate_program, shelf_pack_hint, width_bounds,
+                        zone_of_program)
 from layout import FILL_BY_KIND, circulation_ok, display_name, place_openings, room_kind, solve, to_svg
 from zoning import solve_zoned
 
@@ -53,18 +54,21 @@ SOLVE_TIME_BUDGET = 60.0  # total wall-clock ceiling for a zoned solve, shared
 
 # empty-state sample: a pre-solved SVG cached to disk (regenerate via the
 # one-off script this file's git history/HANDOFF notes, or by hand: run
-# generate_program(1500, 3, 2, "rectangular", "traditional") through solve()
+# generate_program(1500, 3, 2, style="traditional", width=46) through solve()
 # the same way index() below does, then to_svg(..., path="static/sample-plan.svg"))
 # rather than re-solved on every empty-state page load
 with open(os.path.join(os.path.dirname(__file__), "static", "sample-plan.svg")) as f:
     SAMPLE_SVG = f.read()
 SAMPLE_CAPTION = "Example · 1,500 sf ranch"
 
-# quick-start presets shown on the empty state -- (area, beds, baths, shape, style)
+# quick-start presets shown on the empty state -- (area, beds, baths, width, style).
+# width picked to roughly match the old shape="square"/"rectangular" presets
+# (aspect 1.0 / 1.4) now that the form drives the footprint by width slider
+# instead of a shape choice.
 PRESETS = [
-    dict(label="1,200 sf square", area=1200, beds=2, baths=2, shape="square", style="traditional"),
-    dict(label="1,500 sf ranch", area=1500, beds=3, baths=2, shape="rectangular", style="traditional"),
-    dict(label="2,000 sf open concept", area=2000, beds=3, baths=2, shape="rectangular", style="open_concept"),
+    dict(label="1,200 sf square", area=1200, beds=2, baths=2, width=35, style="traditional"),
+    dict(label="1,500 sf ranch", area=1500, beds=3, baths=2, width=46, style="traditional"),
+    dict(label="2,000 sf open concept", area=2000, beds=3, baths=2, width=53, style="open_concept"),
 ]
 
 app = Flask(__name__)
@@ -96,7 +100,10 @@ def _run_solve(source, attempt):
     error) -- form is always populated (defaults if not attempted),
     result/error follow index()'s original meaning (exactly one of them
     non-None after a real attempt, both None otherwise)."""
-    form = dict(area=1500, beds=3, baths=2, shape="rectangular", style="traditional")
+    # width: None means "not specified" (old copy-link URLs from before this
+    # field existed, or a bare GET) -- make_footprint() then falls back to
+    # its old square-ish default rather than erroring.
+    form = dict(area=1500, beds=3, baths=2, shape="rectangular", width=46, style="traditional")
     result = None
     error = None
 
@@ -106,6 +113,8 @@ def _run_solve(source, attempt):
             form["beds"] = int(source.get("beds", ""))
             form["baths"] = int(source.get("baths", ""))
             form["shape"] = source.get("shape", "rectangular")
+            width_raw = source.get("width", "")
+            form["width"] = int(width_raw) if width_raw not in ("", None) else None
             form["style"] = source.get("style", "traditional")
 
             if not (MIN_AREA <= form["area"] <= MAX_AREA):
@@ -116,7 +125,10 @@ def _run_solve(source, attempt):
                 raise ValueError(f"Style must be one of {', '.join(STYLES)}.")
 
             fp, rooms, adj, private = generate_program(
-                form["area"], form["beds"], form["baths"], form["shape"], form["style"])
+                form["area"], form["beds"], form["baths"], form["shape"], form["style"],
+                width=form["width"])
+            form["width"] = fp.width  # reflect the resolved/clamped value (also
+                                       # what the copy-link querystring encodes)
             proximity = default_proximity(rooms)
 
             zoned = len(rooms) > ZONE_ROOM_THRESHOLD
@@ -205,7 +217,7 @@ def _run_solve(source, attempt):
 def index():
     # a GET with query params is a "copy link" visit reproducing a past
     # result (see templates/index.html's Copy link button, which builds
-    # this same area/beds/baths/shape/style querystring via url_for) --
+    # this same area/beds/baths/width/style querystring via url_for) --
     # solve immediately rather than just prefilling the form, so the link
     # is a true "see this exact result" link, not just a starting point.
     # This route stays a plain full-page POST/GET -- it's the no-JS
@@ -219,7 +231,8 @@ def index():
     return render_template(
         "index.html", form=form, result=result, error=error,
         max_beds=MAX_BEDS, max_baths=MAX_BATHS, min_area=MIN_AREA, max_area=MAX_AREA,
-        styles=list(STYLES),
+        width_bounds=width_bounds, width_aspect_max=WIDTH_ASPECT_MAX,
+        width_min_side=WIDTH_MIN_SIDE, styles=list(STYLES),
         living=FILL_BY_KIND["living"], sleep=FILL_BY_KIND["sleep"], wet=FILL_BY_KIND["wet"],
         sample_svg=SAMPLE_SVG, sample_caption=SAMPLE_CAPTION, presets=PRESETS,
     )
