@@ -21,7 +21,7 @@ from generator import (HALLWAYS, MAX_BATHS, MAX_BEDS, PRODUCTION_WEIGHTS,
 from layout import circulation_ok, solve
 from zoning import solve_zoned
 
-SOLVE_TIME_BUDGET = 45.0  # must match app.py's SOLVE_TIME_BUDGET
+SOLVE_TIME_BUDGET = 60.0  # must match app.py's SOLVE_TIME_BUDGET
 TIME_LIMIT = 25.0         # must match app.py's TIME_LIMIT
 
 

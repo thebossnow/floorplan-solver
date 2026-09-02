@@ -43,11 +43,13 @@ TIME_LIMIT = 25.0
 NO_IMPROVEMENT_TIMEOUT = 8.0
 # ZONE_ROOM_THRESHOLD lives in generator.py now -- zone_of_program() needs it
 # too, to decide when to split "private" further into "suite"/"wing".
-SOLVE_TIME_BUDGET = 45.0  # total wall-clock ceiling for a zoned solve, shared
+SOLVE_TIME_BUDGET = 60.0  # total wall-clock ceiling for a zoned solve, shared
                           # across however many zones the program has (see
                           # zoning.solve_zoned's time_budget param) -- leaves
-                          # ~15s margin under Vercel's 60s function maxDuration
-                          # for cold start + render, regardless of zone count
+                          # ~60s margin under Vercel's maxDuration (120s, set
+                          # in vercel.json, needs a Pro plan above the Hobby
+                          # tier's 60s ceiling) for cold start + render,
+                          # regardless of zone count
 
 # empty-state sample: a pre-solved SVG cached to disk (regenerate via the
 # one-off script this file's git history/HANDOFF notes, or by hand: run
