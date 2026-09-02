@@ -45,7 +45,7 @@ def check_zone_sizes():
           "threshold per zone")
 
 
-def solve_program(area, beds, baths, shape, style, label):
+def solve_and_verify(area, beds, baths, shape, style, label):
     """Runs generate_program() -> solve()/solve_zoned() exactly the way
     app.py's index() route does (same weights, same time budgets, same
     zoning threshold), then asserts a plan was found and circulation
@@ -90,10 +90,10 @@ if __name__ == "__main__":
     # flagged as burning its full TIME_LIMIT and landing on FEASIBLE, not
     # OPTIMAL. Not a failure here (FEASIBLE is a valid plan), just worth
     # watching if the elapsed time starts creeping past TIME_LIMIT.
-    solve_program(1500, 3, 2, "rectangular", "traditional", "default preset")
+    solve_and_verify(1500, 3, 2, "rectangular", "traditional", "default preset")
 
     # The smallest preset, and the only one using shape="square".
-    solve_program(1200, 2, 2, "square", "traditional", "1,200 sf square preset")
+    solve_and_verify(1200, 2, 2, "square", "traditional", "1,200 sf square preset")
 
     # NOTE: deliberately not testing the 14/15-room unzoned/zoned boundary at
     # a large area (e.g. 4000 sf) here -- that's covered structurally by
@@ -114,9 +114,9 @@ if __name__ == "__main__":
     # without first addressing that flakiness, or it'll make CI flaky too.
 
     # The bug-triggering case: 5 beds/4 baths, 3-way zoned, both styles.
-    solve_program(4000, 5, 4, "rectangular", "traditional",
+    solve_and_verify(4000, 5, 4, "rectangular", "traditional",
                   "5bed/4bath max (3-way zoned, traditional)")
-    solve_program(4000, 5, 4, "rectangular", "open_concept",
+    solve_and_verify(4000, 5, 4, "rectangular", "open_concept",
                   "5bed/4bath max (3-way zoned, open_concept)")
 
     print("\nAll production-shape checks passed.")

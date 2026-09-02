@@ -710,8 +710,12 @@ def place_openings(plan, fp: Footprint, adjacencies: List[Adj], rooms: List[Room
     no solver change. One door per adjacency, centered on the longest wall
     segment shared by any pair of parts from the two rooms (same overlap
     test as shared_walls(), but this needs the segment's actual position,
-    not just its length). One window per daylight-required room, centered
-    on its longest exterior-touching segment.
+    not just its length) -- except a hall-to-public-room adjacency (e.g.
+    Hall-Living), which gets no door at all: that's an open threshold, not
+    a doorway (added 2026-09-02, plan review) -- a door belongs where a
+    hallway meets a *private* room (bedroom/bath), which still gets one
+    normally. One window per daylight-required room, centered on its
+    longest exterior-touching segment.
 
     Returns a list of dicts: kind ("door"/"window"), orient ("V"/"H"), and
     an (x1, y1, x2, y2) box in grid units -- a thin rect along the wall,
@@ -744,6 +748,8 @@ def place_openings(plan, fp: Footprint, adjacencies: List[Adj], rooms: List[Room
 
     openings = []
     for ad in adjacencies:
+        if {room_kind(ad.a), room_kind(ad.b)} == {"hall", "living"}:
+            continue  # open threshold, not a doorway
         seg = best_shared_segment(plan[ad.a]["parts"], plan[ad.b]["parts"], door_width)
         if not seg:
             continue

@@ -185,10 +185,13 @@ def make_footprint(total_area: int, shape: str = "rectangular", aspect: float = 
 
 def generate_program(total_area: int, beds: int = 3, baths: int = 2,
                       shape: str = "rectangular", style: str = "traditional",
-                      width: int = None):
+                      width: int = None, has_entry: bool = True):
     """Returns (footprint, rooms, adjacencies, private_room_names). `width`
     (ft), when given, overrides `shape`/`aspect` entirely -- see
-    make_footprint()."""
+    make_footprint(). has_entry=False drops the separate Entry room --
+    the style's arrival room (Living for traditional, Great for
+    open_concept) takes over Entry's boundary-edge requirement instead,
+    for a front door that opens directly into it."""
     if style not in STYLES:
         raise ValueError(f"unknown style {style!r}; choose from {sorted(STYLES)}")
     beds = max(1, min(beds, MAX_BEDS))
@@ -198,8 +201,23 @@ def generate_program(total_area: int, beds: int = 3, baths: int = 2,
     fp = make_footprint(total_area, shape, width=width)
     F = fp.area()
 
+    # public_names drives which rooms get built from ROOM_SPECS below --
+    # kept as its own list (not read back off style_cfg["pcts"], which
+    # stays the original, un-mutated style dict) so has_entry=False can
+    # drop "Entry" from it without needing a second, differently-scoped
+    # dict just for the room-construction loop.
+    public_names = list(style_cfg["pcts"])
     pcts = dict(style_cfg["pcts"])
     floors = dict(style_cfg["floors"])
+    style_adj = list(style_cfg["adj"])
+    arrival = None
+    if not has_entry:
+        public_names.remove("Entry")
+        del pcts["Entry"]
+        del floors["Entry"]
+        style_adj = [(a, b) for a, b in style_adj if "Entry" not in (a, b)]
+        arrival = "Great" if "Great" in pcts else "Living"
+
     pcts["Primary"] = PRIMARY_PCT
     floors["Primary"] = PRIMARY_FLOOR
     pcts["PrimBath"] = PRIMARY_BATH_PCT
@@ -219,7 +237,12 @@ def generate_program(total_area: int, beds: int = 3, baths: int = 2,
     for b in bedroom_names:
         targets[b] = max(targets[b] - CLOSET_AREA, floors.get(b, BED_FLOOR))
 
-    rooms = [Room(name, targets[name], **ROOM_SPECS[name]) for name in style_cfg["pcts"]]
+    rooms = []
+    for name in public_names:
+        specs = dict(ROOM_SPECS[name])
+        if name == arrival:
+            specs["edges"] = ["S"]
+        rooms.append(Room(name, targets[name], **specs))
     rooms.append(Room("Primary", targets["Primary"], **ROOM_SPECS["Primary"]))
     rooms.append(Room("PrimBath", targets["PrimBath"], **ROOM_SPECS["PrimBath"]))
     for i in range(2, beds + 1):
@@ -227,7 +250,7 @@ def generate_program(total_area: int, beds: int = 3, baths: int = 2,
     for i in range(2, baths + 1):
         rooms.append(Room(f"Bath{i}", targets[f"Bath{i}"], min_dim=10, max_aspect=2.5))  # 5ft
 
-    adj = [Adj(a, b) for a, b in style_cfg["adj"]]
+    adj = [Adj(a, b) for a, b in style_adj]
     adj.append(Adj("Hall", "Primary"))
     adj.append(Adj("Primary", "PrimBath"))
     for i in range(2, beds + 1):
