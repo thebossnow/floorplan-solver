@@ -10,7 +10,11 @@ the common L-shape case), each part sized/placed independently by the
 solver subject to a mandatory shared-wall constraint between
 consecutive parts.
 
-Units are integer feet on a 1ft grid. Change GRID to use 6in units.
+Units are integer grid-units on a 6in grid (1 grid-unit = 6in; linear
+dimensions are real-feet x2, areas real-sf x4) -- unit-agnostic internally,
+same math regardless of grid size. Public callers (generator.py's
+total_area/width params) still take real square feet/feet and convert at
+that boundary; nothing in this module itself assumes a particular scale.
 """
 
 import re
@@ -68,10 +72,10 @@ def display_name(name: str) -> str:
 @dataclass
 class Room:
     name: str
-    target_area: int              # sq ft
+    target_area: int              # grid-units^2 (1 grid-unit = 6in)
     min_area: Optional[int] = None
     max_area: Optional[int] = None
-    min_dim: int = 8              # shortest allowed wall (per part)
+    min_dim: int = 16             # shortest allowed wall (per part), grid-units (8ft)
     max_aspect: float = 2.0       # long side / short side (per part)
     needs_exterior: bool = True   # needs a window
     edges: List[str] = field(default_factory=list)  # forced: N/S/E/W, applies to part 0
@@ -92,7 +96,7 @@ class Room:
 class Adj:
     a: str
     b: str
-    min_shared: int = 3           # ft of shared wall, enough for a door
+    min_shared: int = 6           # grid-units of shared wall (3ft), enough for a door
 
 
 @dataclass
@@ -116,20 +120,21 @@ class Footprint:
 
 def _min_dim_floor(name: str) -> Optional[int]:
     """Type-based minimum-dimension floor for validate_program()'s guardrail:
-    bedrooms >= 4ft, closets >= 2ft, bathrooms >= 5ft, independent of whatever
-    min_dim a caller happens to pass. Matched by the same name conventions as
-    room_kind(), except bathrooms here exclude Utility (room_kind lumps it
-    into "wet" for rendering, but it isn't a bathroom)."""
+    bedrooms >= 4ft, closets >= 2ft, bathrooms >= 5ft (8/4/10 grid-units),
+    independent of whatever min_dim a caller happens to pass. Matched by the
+    same name conventions as room_kind(), except bathrooms here exclude
+    Utility (room_kind lumps it into "wet" for rendering, but it isn't a
+    bathroom)."""
     if name.endswith("Closet"):
-        return 2
-    if name == "Primary" or name.startswith("Bed"):
         return 4
+    if name == "Primary" or name.startswith("Bed"):
+        return 8
     if name == "PrimBath" or name.startswith("Bath"):
-        return 5
+        return 10
     return None
 
 
-def add_closets(rooms, adjacencies, bedrooms, area=20, min_dim=3, max_aspect=3.0, min_shared=2):
+def add_closets(rooms, adjacencies, bedrooms, area=80, min_dim=6, max_aspect=3.0, min_shared=4):
     """Attach a mandatory closet to each named bedroom.
 
     A closet is just a small interior room plus a forced Adj to its
@@ -190,8 +195,8 @@ def validate_program(footprint: Footprint, rooms: List[Room], adjacencies: List[
         floor = _min_dim_floor(r.name)
         if floor is not None and r.min_dim < floor:
             raise ValueError(
-                f"{r.name}: min_dim={r.min_dim} is below the {floor}ft minimum "
-                f"required for this room type"
+                f"{r.name}: min_dim={r.min_dim} is below the {floor}-grid-unit "
+                f"({floor / 2:g}ft) minimum required for this room type"
             )
         if r.max_aspect < 1:
             raise ValueError(f"{r.name}: max_aspect must be >= 1, got {r.max_aspect}")
@@ -209,9 +214,9 @@ def validate_program(footprint: Footprint, rooms: List[Room], adjacencies: List[
         part_lo = r.min_dim * r.min_dim
         if part_lo > hi:
             raise ValueError(
-                f"{r.name}: min_dim={r.min_dim} forces at least {part_lo} sf per part, "
-                f"but this room's area only ranges up to {hi} sf (target_area={r.target_area}) "
-                "-- raise target_area/max_area or lower min_dim"
+                f"{r.name}: min_dim={r.min_dim} forces at least {part_lo} grid-units^2 "
+                f"per part, but this room's area only ranges up to {hi} grid-units^2 "
+                f"(target_area={r.target_area}) -- raise target_area/max_area or lower min_dim"
             )
 
     for ad in adjacencies:
@@ -227,13 +232,13 @@ def validate_program(footprint: Footprint, rooms: List[Room], adjacencies: List[
     fa = footprint.area()
     if total_lo > fa:
         raise ValueError(
-            f"program needs at least {total_lo} sf across all rooms, "
-            f"but the footprint is only {fa} sf"
+            f"program needs at least {total_lo} grid-units^2 across all rooms, "
+            f"but the footprint is only {fa} grid-units^2"
         )
     if total_hi < fa:
         raise ValueError(
-            f"program's rooms max out at {total_hi} sf combined, "
-            f"but the footprint is {fa} sf -- add rooms or raise max_area/target_area"
+            f"program's rooms max out at {total_hi} grid-units^2 combined, "
+            f"but the footprint is {fa} grid-units^2 -- add rooms or raise max_area/target_area"
         )
 
 
@@ -326,7 +331,12 @@ def solve(footprint: Footprint,
           hint: Optional[Dict[str, Tuple[int, int, int, int]]] = None,
           hallways: Optional[Iterable[str]] = None,
           private: Optional[Iterable[str]] = None,
-          door_width: int = 3,
+          door_width: int = 6,  # grid-units (3ft) -- not in V2-ALPHA-PLAN.md's units
+                                 # table (that only lists place_openings()'s own
+                                 # door_width default); found by reading solve()'s
+                                 # own signature during Phase 1 -- this is the hard-
+                                 # constraint door width, a separate default from
+                                 # place_openings()'s rendering-only one below
           aspect_penalty_weight: int = 0,
           compactness_weight: int = 0,
           alignment_weight: int = 0,
@@ -646,7 +656,10 @@ def solve(footprint: Footprint,
 # Post-processing
 # ----------------------------------------------------------------------
 
-def shared_walls(plan, min_len=3):
+def shared_walls(plan, min_len=6):  # grid-units (3ft) -- also not in the plan's
+                                     # units table; matches Adj.min_shared's own
+                                     # default so "shared wall long enough for a
+                                     # door" means the same threshold everywhere
     """Recover the real adjacency graph from the solved geometry.
 
     Each room may be several rectangular parts (L-shaped rooms); two
@@ -692,7 +705,7 @@ def circulation_ok(plan, entry, private=()):
 
 
 def place_openings(plan, fp: Footprint, adjacencies: List[Adj], rooms: List[Room],
-                    door_width: float = 3.0, window_width: float = 4.0):
+                    door_width: float = 6.0, window_width: float = 8.0):
     """Best-effort door/window placement from the solved geometry alone --
     no solver change. One door per adjacency, centered on the longest wall
     segment shared by any pair of parts from the two rooms (same overlap
@@ -828,6 +841,14 @@ def _room_polygon(parts):
     return loop
 
 
+def _feet_inches(units):
+    """Grid-units (6in each) -> a "X'-Y\"" dimension string. Needed once the
+    unit migration lets a linear dimension land on an odd grid-unit (a real
+    half-foot), which whole-feet formatting used to be able to assume away."""
+    ft, rem = divmod(units, 2)
+    return f'{ft}\'-{6 * rem}"'
+
+
 def _door_svg(o, scale, H):
     """Door leaf + quarter-circle swing arc (the standard plan symbol),
     radius/width equal to the opening -- drawn in place of a flat rect so
@@ -880,7 +901,7 @@ def _north_arrow(x, y):
 
 
 def _scale_bar(x0, y, scale):
-    length = 10 * scale
+    length = 20 * scale  # 10 real feet = 20 grid-units
     return (f'<line x1="{x0}" y1="{y}" x2="{x0+length}" y2="{y}" stroke="{INK}" stroke-width="1.5"/>'
             f'<line x1="{x0}" y1="{y-4}" x2="{x0}" y2="{y+4}" stroke="{INK}" stroke-width="1.5"/>'
             f'<line x1="{x0+length}" y1="{y-4}" x2="{x0+length}" y2="{y+4}" stroke="{INK}" stroke-width="1.5"/>'
@@ -931,7 +952,7 @@ def _exterior_dims(W, H, scale, plan=None):
     for x in (0, W * scale):
         p.append(f'<line x1="{x}" y1="0" x2="{x}" y2="{y}" stroke="{INK}" stroke-width="0.75" opacity="0.6"/>')
     p.append(f'<text x="{W*scale/2}" y="{y-3}" font-family="{FONT_MONO}" font-size="9.5" '
-             f'text-anchor="middle" fill="{INK}">{W}\'-0"</text>')
+             f'text-anchor="middle" fill="{INK}">{_feet_inches(W)}</text>')
     xb = breaks_on_edge(True)
     for gx in xb[1:-1]:
         p.append(f'<line x1="{gx*scale}" y1="2" x2="{gx*scale}" y2="{y}" '
@@ -939,7 +960,7 @@ def _exterior_dims(W, H, scale, plan=None):
     for a, b in zip(xb, xb[1:]):
         if (b - a) * scale >= MIN_SPAN_LABEL_PX:
             p.append(f'<text x="{(a+b)/2*scale}" y="-2" font-family="{FONT_MONO}" font-size="8" '
-                     f'text-anchor="middle" fill="{INK}" opacity="0.75">{b-a}\'</text>')
+                     f'text-anchor="middle" fill="{INK}" opacity="0.75">{_feet_inches(b-a)}</text>')
 
     x = -24
     p.append(f'<line x1="{x}" y1="0" x2="{x}" y2="{H*scale}" stroke="{INK}" stroke-width="1"/>')
@@ -947,7 +968,7 @@ def _exterior_dims(W, H, scale, plan=None):
         p.append(f'<line x1="{x}" y1="{gy}" x2="0" y2="{gy}" stroke="{INK}" stroke-width="0.75" opacity="0.6"/>')
     p.append(f'<text x="{x-4}" y="{H*scale/2}" font-family="{FONT_MONO}" font-size="9.5" '
              f'text-anchor="middle" fill="{INK}" transform="rotate(-90 {x-4} {H*scale/2})">'
-             f'{H}\'-0"</text>')
+             f'{_feet_inches(H)}</text>')
     yb = breaks_on_edge(False)
     for gy in yb[1:-1]:
         gy_svg = (H - gy) * scale
@@ -958,12 +979,12 @@ def _exterior_dims(W, H, scale, plan=None):
             mid_svg = (H - (a + b) / 2) * scale
             p.append(f'<text x="-2" y="{mid_svg}" font-family="{FONT_MONO}" font-size="8" '
                      f'text-anchor="middle" fill="{INK}" opacity="0.75" '
-                     f'transform="rotate(-90 -2 {mid_svg})">{b-a}\'</text>')
+                     f'transform="rotate(-90 -2 {mid_svg})">{_feet_inches(b-a)}</text>')
     return p
 
 
-def to_svg(plan, fp: Footprint, scale=14, path="plan.svg", openings=None,
-           interior_thickness=0.3, exterior_thickness=0.5, title_block=None):
+def to_svg(plan, fp: Footprint, scale=7, path="plan.svg", openings=None,
+           interior_thickness=0.6, exterior_thickness=1.0, title_block=None):
     """Renders the plan to SVG. If path is None, returns the markup string
     directly instead of writing to disk -- use this from a server handling
     concurrent requests, since writing every request to the same path is a
@@ -979,7 +1000,7 @@ def to_svg(plan, fp: Footprint, scale=14, path="plan.svg", openings=None,
     complexity while the seam-merge itself is still new.
 
     Rooms are filled by use (living/sleep/wet/closet-hatch, Hall left
-    neutral) on a 1ft graph-paper grid, doors draw as a swing arc and
+    neutral) on a 1ft-light/5ft-heavy graph-paper grid, doors draw as a swing arc and
     windows as a double line rather than a flat colored rect. The sheet
     carries overall width/depth dimension strings, a north arrow, and a
     10ft scale bar; title_block, if given, is
@@ -1003,13 +1024,24 @@ def to_svg(plan, fp: Footprint, scale=14, path="plan.svg", openings=None,
          f'<line x1="0" y1="0" x2="0" y2="6" stroke="{INK}" stroke-width="1" opacity="0.25"/>'
          f'</pattern></defs>',
          f'<rect x="-{margin_left}" y="-{margin_top}" width="100%" height="100%" fill="{SHEET}"/>']
-    for gx in range(W + 1):
-        heavy = gx % 5 == 0
+    # light line every 2 grid-units (1 real foot), heavy every 10 (5ft) --
+    # was every-1/every-5 pre-migration, when 1 grid-unit was 1ft instead
+    # of 6in (drawing a line every single 6in grid-unit here would be far
+    # too dense to read as graph paper). Footprint dimensions can now land
+    # on an odd grid-unit (a real half-foot) -- append the boundary
+    # explicitly when a plain step-2 range would land just short of it.
+    def _grid_lines(dim):
+        lines = list(range(0, dim + 1, 2))
+        if lines[-1] != dim:
+            lines.append(dim)
+        return lines
+    for gx in _grid_lines(W):
+        heavy = gx % 10 == 0
         p.append(f'<line x1="{gx*scale}" y1="0" x2="{gx*scale}" y2="{H*scale}" '
                   f'stroke="{GRID}" stroke-width="{1 if heavy else 0.5}" '
                   f'opacity="{0.55 if heavy else 0.3}"/>')
-    for gy in range(H + 1):
-        heavy = gy % 5 == 0
+    for gy in _grid_lines(H):
+        heavy = gy % 10 == 0
         p.append(f'<line x1="0" y1="{gy*scale}" x2="{W*scale}" y2="{gy*scale}" '
                   f'stroke="{GRID}" stroke-width="{1 if heavy else 0.5}" '
                   f'opacity="{0.55 if heavy else 0.3}"/>')
@@ -1040,10 +1072,10 @@ def to_svg(plan, fp: Footprint, scale=14, path="plan.svg", openings=None,
             cx, cy = (ix1 + ix2) / 2 * scale, (H - (iy1 + iy2) / 2) * scale
             pxw, pxh = (ix2 - ix1) * scale, (iy2 - iy1) * scale
             w, h = part["x2"] - part["x1"], part["y2"] - part["y1"]
-            dims = f'{w}\'-0" × {h}\'-0"'
+            dims = f'{_feet_inches(w)} × {_feet_inches(h)}'
             if part is biggest:
                 name_label = display_name(n)
-                area_label = f'{room["area"]} SF'
+                area_label = f'{room["area"] / 4:,.0f} SF'  # grid-units^2 -> real sf
                 if pxw >= 70 and pxh >= 40:
                     # room's big enough for the full three-line label
                     max_chars = max(4, int(pxw / 6.8))

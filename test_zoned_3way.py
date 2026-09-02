@@ -7,28 +7,28 @@ import time
 # "public", so the layout is garage | private | public west-to-east) and
 # per-wall cross-adjacency anchoring, generalized from the 2-zone case in
 # test_zoned.py.
-fp = Footprint(width=80, height=32)  # 2560 sf
+fp = Footprint(width=160, height=64)  # 2560 sf (grid-units: 1 unit = 6in)
 
 # single-room garage zone -- keeps the zone's own internal packing trivial
 # so this test stays focused on exercising solve_zoned()'s N-way split and
 # per-wall cross-adjacency anchoring, not garage-specific room-fit tuning
 garage_rooms = [
-    Room("Garage", 380, min_dim=10, max_aspect=2.5),
+    Room("Garage", 380, min_dim=20, max_aspect=2.5),
 ]
 private_rooms = [
-    Room("Primary",   230, min_dim=12, max_aspect=1.6),
-    Room("PrimBath",   90, min_dim=6,  max_aspect=2.5),
-    Room("Bed2",      160, min_dim=10, max_aspect=1.6),
-    Room("Bath2",      60, min_dim=5,  max_aspect=2.5),
-    Room("PLHall",    110, min_dim=4,  max_aspect=8.0, needs_exterior=False),
+    Room("Primary",   230, min_dim=24, max_aspect=1.6),
+    Room("PrimBath",   90, min_dim=12, max_aspect=2.5),
+    Room("Bed2",      160, min_dim=20, max_aspect=1.6),
+    Room("Bath2",      60, min_dim=10, max_aspect=2.5),
+    Room("PLHall",    110, min_dim=8,  max_aspect=8.0, needs_exterior=False),
 ]
 public_rooms = [
-    Room("Entry",      60,  min_dim=6,  max_aspect=2.5, edges=["S"]),
-    Room("Living",    280,  min_dim=12, max_aspect=1.8),
-    Room("Kitchen",   190,  min_dim=10, max_aspect=2.0),
-    Room("Dining",    150,  min_dim=10, max_aspect=1.8),
-    Room("Hall",      100,  min_dim=4,  max_aspect=8.0, needs_exterior=False),
-    Room("Utility",    70,  min_dim=6,  max_aspect=2.5, needs_exterior=False),
+    Room("Entry",      60,  min_dim=12, max_aspect=2.5, edges=["S"]),
+    Room("Living",    280,  min_dim=24, max_aspect=1.8),
+    Room("Kitchen",   190,  min_dim=20, max_aspect=2.0),
+    Room("Dining",    150,  min_dim=20, max_aspect=1.8),
+    Room("Hall",      100,  min_dim=8,  max_aspect=8.0, needs_exterior=False),
+    Room("Utility",    70,  min_dim=12, max_aspect=2.5, needs_exterior=False),
 ]
 
 rooms = garage_rooms + private_rooms + public_rooms
@@ -64,7 +64,7 @@ if zone_metrics:
 if plan:
     tot = 0
     for n, r in sorted(plan.items()):
-        print(f"  {n:11s} {r['area']:4d} sf  (target {r['target']}, delta {r['area']-r['target']:+d})")
+        print(f"  {n:11s} {r['area']:4d} gu^2  (target {r['target']}, delta {r['area']-r['target']:+d})")
         tot += r["area"]
     print(f"  total {tot} / footprint {fp.area()}")
 

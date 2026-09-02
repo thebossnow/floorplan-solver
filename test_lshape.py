@@ -1,14 +1,14 @@
 from layout import Room, Adj, Footprint, solve, shared_walls, circulation_ok, to_svg, place_openings
 import time
 
-fp = Footprint(width=24, height=20)   # 480 sf
+fp = Footprint(width=48, height=40)   # 480 sf (grid-units: 1 unit = 6in)
 
 rooms = [
-    Room("Entry",    40,  min_dim=5, max_aspect=2.5, edges=["S"]),
-    Room("Living",  200,  min_dim=8, max_aspect=2.5, parts=2),   # L-shaped
-    Room("Kitchen", 120,  min_dim=8, max_aspect=2.0),
-    Room("Bath",     60,  min_dim=5, max_aspect=2.5, needs_exterior=False),
-    Room("Closet",   60,  min_dim=4, max_aspect=3.0, needs_exterior=False),
+    Room("Entry",    160, min_dim=10, max_aspect=2.5, edges=["S"]),
+    Room("Living",   800, min_dim=16, max_aspect=2.5, parts=2),   # L-shaped
+    Room("Kitchen",  480, min_dim=16, max_aspect=2.0),
+    Room("Bath",     240, min_dim=10, max_aspect=2.5, needs_exterior=False),
+    Room("Closet",   240, min_dim=8,  max_aspect=3.0, needs_exterior=False),
 ]
 
 adj = [
@@ -27,7 +27,7 @@ if plan:
     tot = 0
     for n, r in sorted(plan.items()):
         dims = " + ".join(f"{p['x2']-p['x1']}x{p['y2']-p['y1']}" for p in r["parts"])
-        print(f"  {n:9s} {len(r['parts'])} part(s)  {dims:16s} = {r['area']:4d} sf  "
+        print(f"  {n:9s} {len(r['parts'])} part(s)  {dims:16s} = {r['area']:4d} gu^2  "
               f"(target {r['target']}, delta {r['area']-r['target']:+d})")
         tot += r["area"]
     print(f"  total {tot} / footprint {fp.area()}")

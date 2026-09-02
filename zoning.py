@@ -182,7 +182,11 @@ def solve_zoned(footprint: Footprint,
         n = len(group)
         for i, ad in enumerate(group):
             slot = perp_dim / n
-            width = max(ad.min_shared, min(ad.min_shared + 2, slot - 2))
+            # +/-4 grid-units (2ft) of slack -- a real spatial constant this
+            # module does have, despite V2-ALPHA-PLAN.md's units table saying
+            # "zoning.py needs no change" (found during Phase 1 by reading the
+            # whole file, not just trusting that claim)
+            width = max(ad.min_shared, min(ad.min_shared + 4, slot - 4))
             center = slot * (i + 0.5)
             band_lo = max(0, round(center - width / 2))
             band_hi = min(perp_dim, band_lo + round(width))
@@ -302,6 +306,11 @@ def solve_zoned(footprint: Footprint,
     for z in zones:
         merged.update(translate(plans[z], *origin_by_zone[z]))
 
+    # min_len=1 left as a literal grid-unit (not x2'd): this is a "detect any
+    # nonzero touch" sensitivity floor for building the lookup dict below,
+    # not itself a physical minimum -- the real gate is `>= ad.min_shared`
+    # on the next line, which IS correctly grid-unit-scaled (Adj default 6).
+    # Reviewed during Phase 1, left unchanged on purpose.
     wall_len = {frozenset((a, b)): length for a, b, _, length in shared_walls(merged, min_len=1)}
     satisfied, failed = [], []
     for ad in cross:

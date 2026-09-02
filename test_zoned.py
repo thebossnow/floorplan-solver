@@ -5,26 +5,26 @@ import time
 # 16-room program split into a public zone and a private (bedroom) zone --
 # this is the case that (per README) slows solve() down badly as one model;
 # solving each zone separately is the documented fix.
-fp = Footprint(width=56, height=40)  # 2240 sf
+fp = Footprint(width=112, height=80)  # 2240 sf (grid-units: 1 unit = 6in)
 
 public_rooms = [
-    Room("Entry",   60,  min_dim=6,  max_aspect=2.5, edges=["S"]),
-    Room("Living", 280,  min_dim=12, max_aspect=1.8),
-    Room("Kitchen",190,  min_dim=10, max_aspect=2.0),
-    Room("Dining", 150,  min_dim=10, max_aspect=1.8),
-    Room("Hall",   100,  min_dim=4,  max_aspect=8.0, needs_exterior=False),
-    Room("Family", 210,  min_dim=12, max_aspect=1.8),
-    Room("Utility", 70,  min_dim=6,  max_aspect=2.5, needs_exterior=False),
+    Room("Entry",   60,  min_dim=12, max_aspect=2.5, edges=["S"]),
+    Room("Living", 280,  min_dim=24, max_aspect=1.8),
+    Room("Kitchen",190,  min_dim=20, max_aspect=2.0),
+    Room("Dining", 150,  min_dim=20, max_aspect=1.8),
+    Room("Hall",   100,  min_dim=8,  max_aspect=8.0, needs_exterior=False),
+    Room("Family", 210,  min_dim=24, max_aspect=1.8),
+    Room("Utility", 70,  min_dim=12, max_aspect=2.5, needs_exterior=False),
 ]
 private_rooms = [
-    Room("Primary",   230, min_dim=12, max_aspect=1.6),
-    Room("PrimBath",   90, min_dim=6,  max_aspect=2.5),
-    Room("Bed2",       160, min_dim=10, max_aspect=1.6),
-    Room("Bed3",       150, min_dim=10, max_aspect=1.6),
-    Room("Bed4",       140, min_dim=10, max_aspect=1.6),
-    Room("Bath2",       60, min_dim=5,  max_aspect=2.5),
-    Room("Bath3",       60, min_dim=5,  max_aspect=2.5),
-    Room("PLHall",     100, min_dim=4,  max_aspect=8.0, needs_exterior=False),
+    Room("Primary",   230, min_dim=24, max_aspect=1.6),
+    Room("PrimBath",   90, min_dim=12, max_aspect=2.5),
+    Room("Bed2",       160, min_dim=20, max_aspect=1.6),
+    Room("Bed3",       150, min_dim=20, max_aspect=1.6),
+    Room("Bed4",       140, min_dim=20, max_aspect=1.6),
+    Room("Bath2",       60, min_dim=10, max_aspect=2.5),
+    Room("Bath3",       60, min_dim=10, max_aspect=2.5),
+    Room("PLHall",     100, min_dim=8,  max_aspect=8.0, needs_exterior=False),
 ]
 
 rooms = public_rooms + private_rooms
@@ -62,7 +62,7 @@ if zone_metrics:
 if plan:
     tot = 0
     for n, r in sorted(plan.items()):
-        print(f"  {n:9s} {r['area']:4d} sf  (target {r['target']}, delta {r['area']-r['target']:+d})")
+        print(f"  {n:9s} {r['area']:4d} gu^2  (target {r['target']}, delta {r['area']-r['target']:+d})")
         tot += r["area"]
     print(f"  total {tot} / footprint {fp.area()}")
 
