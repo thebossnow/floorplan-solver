@@ -41,7 +41,17 @@ TIME_LIMIT = 25.0
 # with CpSolver.parameters.log_search_progress per HANDOFF's documented
 # technique. NO_IMPROVEMENT_TIMEOUT cuts that plateau short at negligible
 # quality cost (roughly full-TIME_LIMIT solution quality, empirically).
-NO_IMPROVEMENT_TIMEOUT = 8.0
+#
+# _ImprovementTracker.last_improvement (layout.py) starts its clock at
+# search start, not at the first incumbent -- so this same timeout was also
+# cutting off searches that hadn't found *any* solution yet, misreported as
+# "plateaued" when it was really "still searching for a first incumbent".
+# Raised 8.0 -> 15.0 (2026-09-02) after that showed up live: a 46x33/3bed/
+# 2bath solve (known to succeed in 16-37s with a first incumbent sometimes
+# landing late) came back UNKNOWN at exactly 8.0s on Vercel, then succeeded
+# on retry with no code change -- i.e. the 8s stall cutoff, not the search
+# itself, was the false negative.
+NO_IMPROVEMENT_TIMEOUT = 15.0
 # ZONE_ROOM_THRESHOLD lives in generator.py now -- zone_of_program() needs it
 # too, to decide when to split "private" further into "suite"/"wing".
 SOLVE_TIME_BUDGET = 60.0  # total wall-clock ceiling for a zoned solve, shared
