@@ -221,22 +221,86 @@ def default_proximity(rooms: List[Room]) -> List[Proximity]:
     return [Proximity(a, b) for a, b in DEFAULT_PROXIMITY_PAIRS if a in names and b in names]
 
 
+ZONE_ROOM_THRESHOLD = 14   # more rooms than this: split into zones instead --
+                           # matches README's documented ">15 rooms slows down"
+                           # (a 15-room 4-bed/3-bath open_concept program was the
+                           # one found genuinely INFEASIBLE unzoned in testing);
+                           # the default 3-bed/2-bath program is 14 rooms and
+                           # solves fine unzoned, so this shouldn't fire for typical inputs
+
+
 def zone_of_program(rooms: List[Room]) -> Dict[str, str]:
-    """Classifies a generate_program() room list into the "public"/"private"
-    zones zoning.solve_zoned() needs, for when a program is too large to
-    hand to solve() as one model. Hall touches every bedroom (not the
-    public rooms) in every style above, so it's part of the private wing,
-    not a public hub -- putting it in "public" instead turns one cross-zone
-    connector into one per bedroom/bathroom, which is exactly the
-    "too many cross-zone adjacencies on one room" case solve_zoned's
-    docstring warns tends to fail. Not meaningful for a hand-built room
-    list that doesn't follow this naming convention."""
+    """Classifies a generate_program() room list into zones for
+    zoning.solve_zoned(), for when a program is too large to hand to
+    solve() as one model. Normally a 2-way "public"/"private" split: Hall
+    touches every bedroom (not the public rooms) in every style above, so
+    it's part of the private wing, not a public hub -- putting it in
+    "public" instead turns one cross-zone connector into one per
+    bedroom/bathroom, which is exactly the "too many cross-zone
+    adjacencies on one room" case solve_zoned's docstring warns tends to
+    fail.
+
+    At the top of the beds/baths range (5 beds/4 baths -- MAX_BEDS/
+    MAX_BATHS above), "private" alone comes out to 15 rooms, over
+    ZONE_ROOM_THRESHOLD, which used to fail solve_zoned outright (each
+    zone must itself stay under the threshold). In that case the private
+    wing is split further into "suite" (Hall, the primary bedroom's own
+    rooms, and -- see below -- the first secondary bedroom) and "wing"
+    (every other secondary bedroom/bathroom/closet). Zone names are
+    chosen so they sort alphabetically as public < suite < wing, matching
+    the physical chain a style's own adjacencies imply (public's
+    Living/Great touches Hall; Hall then needs to sit next to wing so the
+    Hall-Bed{i}/Hall-Bath{i} cross-zone adjacencies have a shared wall to
+    anchor to) -- solve_zoned() raises ValueError if this ordering doesn't
+    hold, so don't rename these zones without re-checking it.
+
+    Why "suite" also gets one secondary bedroom, not just Hall/Primary/
+    PrimBath/PrimaryCloset: solve_zoned() sizes each zone's slab
+    proportionally to its own room-area total, and Hall+Primary+PrimBath+
+    PrimaryCloset alone is a small enough share of the whole footprint
+    (~20% for the 5-bed/4-bath case) that the resulting slab comes out
+    narrower than Primary's own max_aspect requires (Primary needs a
+    ~16ft short side at max_aspect=1.7; a bare 4-room suite's slab came
+    out ~15ft in testing, and the zone failed INFEASIBLE outright).
+    Folding one secondary bedroom in widens suite's area share enough to
+    clear that floor -- confirmed empirically for the 5-bed/4-bath case,
+    not derived from a general formula, so re-check this if MAX_BEDS/
+    MAX_BATHS ever change.
+
+    Secondary bedrooms/baths in "wing" have no hallway room in their own
+    zone, so solve()'s door-access constraint falls back to requiring
+    them to touch the wing's own exterior directly instead of reaching
+    Hall -- stricter than before, but physically reasonable (bedrooms
+    plausibly want a window anyway). Some of the Hall-anchored cross-zone
+    adjacencies (into both suite and wing) may still end up in
+    solve_zoned's cross_report["failed"] at this room count -- expected
+    given how many connectors compete for anchors on the same two walls;
+    circulation_ok() still holds (every room reachable from Entry via
+    *some* shared wall, not necessarily the originally-intended one),
+    which is the guarantee that actually matters.
+
+    Not meaningful for a hand-built room list that doesn't follow this
+    naming convention."""
     zone_of = {}
+    private_names = []
     for r in rooms:
         n = r.name
         if n == "Hall" or n in ("Primary", "PrimBath") or \
                 n.startswith(("Bed", "Bath")) or n.endswith("Closet"):
             zone_of[n] = "private"
+            private_names.append(n)
         else:
             zone_of[n] = "public"
+
+    if len(private_names) > ZONE_ROOM_THRESHOLD:
+        secondary_beds = sorted(
+            (n for n in private_names if n.startswith("Bed") and not n.endswith("Closet")),
+            key=lambda n: int(n[len("Bed"):]))
+        suite_extra = {secondary_beds[0], f"{secondary_beds[0]}Closet"} if secondary_beds else set()
+        for n in private_names:
+            if n == "Hall" or n in ("Primary", "PrimBath", "PrimaryCloset") or n in suite_extra:
+                zone_of[n] = "suite"
+            else:
+                zone_of[n] = "wing"
+
     return zone_of

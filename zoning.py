@@ -40,10 +40,16 @@ because of its own anchors still solves; it just can't promise the
 cross-zone doorway that anchor was trying to win.
 """
 
+import time
 from dataclasses import replace
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from layout import Room, Adj, Footprint, Proximity, solve, shared_walls
+
+MIN_ZONE_SECONDS = 5.0    # a zone's own share of time_budget never drops below
+                          # this, even if an earlier zone overran its share
+MIN_RETRY_SECONDS = 2.0   # anchor-free retry's floor, once the anchored
+                          # attempt has already spent part of the zone's budget
 
 
 def solve_zoned(footprint: Footprint,
@@ -52,6 +58,7 @@ def solve_zoned(footprint: Footprint,
                  zone_of: Dict[str, str],
                  split_axis: str = "x",
                  time_limit: float = 30.0,
+                 time_budget: Optional[float] = None,
                  seed: int = 0,
                  workers: int = 8,
                  hallways: Optional[Iterable[str]] = None,
@@ -62,6 +69,24 @@ def solve_zoned(footprint: Footprint,
     covering every room in `rooms`. split_axis: "x" lays the zones out
     west-to-east in alphabetical order of zone name, one slab per zone;
     "y" lays them out south-to-north the same way.
+
+    time_limit: flat per-zone-attempt cap, used as-is when time_budget is
+    omitted (each zone's anchored attempt AND its anchor-free retry each get
+    the full time_limit -- today's original behavior, worst case
+    2 * time_limit * len(zones), unbounded as zone count grows).
+
+    time_budget: when given, overrides time_limit with a single wall-clock
+    ceiling for the *entire* call, shared across every zone regardless of
+    how many there are -- the right choice whenever the caller itself has a
+    hard deadline (e.g. a serverless function's own execution-time cap).
+    Before each zone, the remaining budget is divided evenly across the
+    zones not yet attempted (floored at MIN_ZONE_SECONDS so a late zone
+    isn't starved to nothing by earlier overruns), and within a zone the
+    anchor-free retry only gets what's left of that zone's own share after
+    the anchored attempt's actual wall_time (floored at MIN_RETRY_SECONDS)
+    instead of a second full allotment -- so total wall time across all
+    zones stays bounded by time_budget (plus a small, bounded overshoot from
+    the two floors) instead of scaling with zone count.
 
     hallways/private: passed through to each zone's own solve() call (see
     its docstring), filtered down to just the names present in that zone --
@@ -85,11 +110,15 @@ def solve_zoned(footprint: Footprint,
     {"satisfied": [(a,b), ...], "failed": [(a,b), ...]} for the
     cross-zone adjacencies -- check "failed" before assuming the plan
     matches the requested program. zone_metrics is None on failure, else
-    {zone_name: (objective_value, best_objective_bound, wall_time)} from
-    whichever of that zone's solve() calls actually produced its plan (the
-    anchored attempt, or the anchor-free retry if the anchored one failed)
-    -- not aggregated across zones, since each zone's objective is scored
-    independently and summing/comparing them isn't meaningful.
+    {zone_name: (objective_value, best_objective_bound, wall_time, status)}
+    from whichever of that zone's solve() calls actually produced its plan
+    (the anchored attempt, or the anchor-free retry if the anchored one
+    failed) -- not aggregated across zones, since each zone's objective is
+    scored independently and summing/comparing them isn't meaningful.
+    status is that zone's own raw CP-SAT status string (e.g. "OPTIMAL"),
+    letting a caller tell a fully-proved zone apart from one that only
+    reached FEASIBLE, the same distinction solve()'s own status gives on
+    the unzoned path.
 
     Doesn't support footprint voids yet -- raises ValueError if
     footprint.voids is non-empty."""
@@ -219,30 +248,43 @@ def solve_zoned(footprint: Footprint,
     all_proximity = list(proximity or ())
     weights = weights or {}
 
-    def solve_zone(fp_zone, zone_rooms, zone_adj):
+    def solve_zone(fp_zone, zone_rooms, zone_adj, zone_time_limit):
         zone_names = {r.name for r in zone_rooms}
         zone_hallways = all_hallways & zone_names
         zone_private = all_private & zone_names
         zone_proximity = [pr for pr in all_proximity if pr.a in zone_names and pr.b in zone_names]
         plan, status, objective_value, best_objective_bound, wall_time = solve(
             fp_zone, anchored(zone_rooms), zone_adj,
-            time_limit=time_limit, seed=seed, workers=workers,
+            time_limit=zone_time_limit, seed=seed, workers=workers,
             hallways=zone_hallways, private=zone_private,
             proximity=zone_proximity, **weights)
         if plan:
-            return plan, status, (objective_value, best_objective_bound, wall_time)
+            return plan, status, (objective_value, best_objective_bound, wall_time, status)
         # the cross-zone anchor(s) may be what made this infeasible -- retry
-        # without them rather than failing a zone that's solvable on its own
+        # without them rather than failing a zone that's solvable on its own.
+        # Under a shared time_budget, the retry only gets what's left of this
+        # zone's own share (floored at MIN_RETRY_SECONDS) instead of a second
+        # full allotment, so one zone's worst case doesn't double.
+        retry_limit = zone_time_limit
+        if time_budget is not None:
+            retry_limit = max(MIN_RETRY_SECONDS, zone_time_limit - wall_time)
         plan, status, objective_value, best_objective_bound, wall_time = solve(
             fp_zone, zone_rooms, zone_adj,
-            time_limit=time_limit, seed=seed, workers=workers,
+            time_limit=retry_limit, seed=seed, workers=workers,
             hallways=zone_hallways, private=zone_private,
             proximity=zone_proximity, **weights)
-        return plan, status, (objective_value, best_objective_bound, wall_time)
+        return plan, status, (objective_value, best_objective_bound, wall_time, status)
 
     plans, statuses, zone_metrics = {}, {}, {}
-    for z in zones:
-        plan_z, status_z, metrics_z = solve_zone(fp_by_zone[z], rooms_by_zone[z], intra_by_zone[z])
+    start = time.time()
+    for i, z in enumerate(zones):
+        if time_budget is not None:
+            remaining = time_budget - (time.time() - start)
+            zone_time_limit = max(MIN_ZONE_SECONDS, remaining / (len(zones) - i))
+        else:
+            zone_time_limit = time_limit
+        plan_z, status_z, metrics_z = solve_zone(
+            fp_by_zone[z], rooms_by_zone[z], intra_by_zone[z], zone_time_limit)
         if not plan_z:
             return None, f"zone {z!r} failed: {status_z}", None, None
         plans[z], statuses[z], zone_metrics[z] = plan_z, status_z, metrics_z

@@ -58,8 +58,8 @@ t = time.time()
 plan, status, cross, zone_metrics = solve_zoned(fp, rooms, adj, zone_of, split_axis="x", time_limit=20)
 print(f"status={status}  {time.time()-t:.1f}s")
 if zone_metrics:
-    for zname, (obj, bound, wt) in zone_metrics.items():
-        print(f"  zone {zname}: objective={obj}  bound={bound}  solve_wall_time={wt:.1f}s")
+    for zname, (obj, bound, wt, st) in zone_metrics.items():
+        print(f"  zone {zname}: status={st}  objective={obj}  bound={bound}  solve_wall_time={wt:.1f}s")
 
 if plan:
     tot = 0

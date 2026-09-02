@@ -1,0 +1,60 @@
+{# Rendered both by index.html's initial page load ({% include %}, when a
+   POST/GET-with-querystring already has a result) and standalone by
+   app.py's /solve route (via render_template, wrapped in JSON) for the
+   fetch()-based non-blocking submit -- keep this file self-contained
+   (needs `result` and `form` in context) so both call sites stay in sync. #}
+<div class="drawing-col">
+  <div class="headline">
+    <span class="num">{{ result.headline }}</span>
+  </div>
+  <div class="circulation">
+    {% if result.circulation_ok %}Every room reachable from the entry.
+    {% else %}<span class="warn">Unreachable from the entry: {{ result.unreachable | join(", ") }}</span>{% endif %}
+    {% if result.cross and result.cross.failed %}
+      <span class="warn">· connector not satisfied: {{ result.cross.failed | map("join", " – ") | join(", ") }}</span>
+    {% endif %}
+    {% if not result.is_optimal %}
+      · Good layout — every hard rule is satisfied, but the solver ran out of time to prove this is the single best arrangement.
+    {% endif %}
+  </div>
+
+  <div class="drawing-wrap">{{ result.svg | safe }}</div>
+
+  <div class="drawing-controls">
+    <span class="zoom-hint">Drag to pan · scroll or pinch to zoom</span>
+    <div class="drawing-controls-buttons">
+      <button type="button" class="download-btn" id="copy-link"
+              data-share-url="{{ url_for('index', area=form.area, beds=form.beds, baths=form.baths, shape=form.shape, style=form.style, _external=True) }}">Copy link</button>
+      <button type="button" class="download-btn" id="reset-view">Reset view</button>
+    </div>
+  </div>
+
+  <button type="button" class="download-btn" id="download-svg">Download sheet</button>
+
+  <details>
+    <summary>How this was built</summary>
+    <div class="solver-info">
+      <span>Status <b>{{ result.status }}</b></span>
+      <span>Solve time <b>{{ result.elapsed }}s</b>{% if result.zoned %} <b>(zoned)</b>{% endif %}</span>
+      <span>Footprint <b>{{ result.footprint }}</b></span>
+      <span>Total area <b>{{ result.total }} sf</b></span>
+    </div>
+  </details>
+
+  <table>
+    <tr><th>Room</th><th>Area</th><th>Target</th><th>Delta</th></tr>
+    {% set ns = namespace(group="") %}
+    {% for r in result.rooms %}
+      {% if r.group != ns.group %}
+      <tr class="group-row"><td colspan="4">{{ r.group }}</td></tr>
+      {% set ns.group = r.group %}
+      {% endif %}
+      <tr data-room="{{ r.raw_name }}">
+        <td><span class="swatch" style="background:{{ r.swatch }}"></span>{{ r.name }}</td>
+        <td>{{ r.area }} sf</td>
+        <td>{{ r.target }} sf</td>
+        <td class="{{ 'delta-miss' if r.delta|abs > 10 else '' }}">{{ "%+d" | format(r.delta) }}</td>
+      </tr>
+    {% endfor %}
+  </table>
+</div>

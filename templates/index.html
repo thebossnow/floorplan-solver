@@ -24,7 +24,7 @@
   body { font-family: 'IBM Plex Sans', Arial, sans-serif; max-width: 1080px;
          margin: 40px auto; padding: 0 16px; color: var(--ink); background: var(--sheet); }
   h1 { font-family: 'IBM Plex Serif', Georgia, serif; font-weight: 600;
-       font-size: 26px; margin-bottom: 4px; letter-spacing: 0.2px; }
+       font-size: 26px; margin-bottom: 4px; letter-spacing: 0.2px; text-wrap: balance; }
   p.sub { color: var(--ink-soft); margin-top: 0; font-size: 14px; max-width: 46em; }
 
   .layout { display: grid; grid-template-columns: 1fr; grid-template-areas: "spec";
@@ -114,6 +114,7 @@
   .chip-group { display: flex; gap: 8px; flex-wrap: wrap; }
   .chip-group input { position: absolute; opacity: 0; width: 1px; height: 1px; }
   .chip-group label { display: flex; align-items: center; gap: 7px; padding: 9px 12px;
+                       min-height: 44px; box-sizing: border-box;
                        border: 1px solid var(--grid); border-radius: 7px; background: #fff;
                        font-size: 13px; cursor: pointer; user-select: none;
                        transition: border-color 150ms, background 150ms; }
@@ -122,6 +123,9 @@
 
   /* quick-start presets on the empty state */
   .presets { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+  .presets[hidden] { display: none; } /* [hidden] alone loses to the flex rule above --
+                                          both are equal-specificity author/author, and
+                                          source order alone doesn't favor the attribute */
   .presets-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
                     color: var(--ink-soft); }
   .preset-chip { padding: 7px 11px; font-size: 12px; font-weight: 500; background: #fff;
@@ -185,7 +189,7 @@
 <h1>Floor Plan Solver</h1>
 <p class="sub">Give it a foundation and a program, and it tiles every room to the inch — no gaps, no overlaps, doors and windows placed where the walls actually allow them.</p>
 
-<div class="layout {{ 'has-result' if (result or sample_svg) }}">
+<div class="layout {{ 'has-result' if (result or sample_svg) }}" id="layout">
   <div class="spec-col">
     <form method="post" id="plan-form">
       <div>
@@ -234,68 +238,31 @@
         </div>
       </div>
       <button type="submit" id="generate-btn">Draw this house</button>
-      <p class="hint">Usually takes 10–25 seconds.</p>
+      <p class="hint">Usually takes a few seconds, up to 45 for large layouts.</p>
     </form>
 
-    {% if not result %}
-    <div class="presets">
+    <div class="presets" id="presets" {{ 'hidden' if result }}>
       <span class="presets-label">Try:</span>
       {% for p in presets %}
       <button type="button" class="preset-chip" data-area="{{ p.area }}" data-beds="{{ p.beds }}"
               data-baths="{{ p.baths }}" data-shape="{{ p.shape }}" data-style="{{ p.style }}">{{ p.label }}</button>
       {% endfor %}
     </div>
-    {% endif %}
 
-    {% if error %}
-    <div class="error">{{ error }}</div>
-    {% endif %}
+    <div id="error-box">
+      {% if error %}<div class="error">{{ error }}</div>{% endif %}
+    </div>
 
-    {% if result %}
-    <div class="legend">
+    <div class="legend" id="legend" {{ '' if result else 'hidden' }}>
       <div><span class="swatch" style="background:{{ living }}"></span>Public — living, dining, kitchen</div>
       <div><span class="swatch" style="background:{{ sleep }}"></span>Private — bedrooms, closets</div>
       <div><span class="swatch" style="background:{{ wet }}"></span>Service — baths, utility</div>
     </div>
-    {% endif %}
   </div>
 
+  <div id="drawing-col-wrap">
   {% if result %}
-  <div class="drawing-col">
-    <div class="headline">
-      <span class="num">{{ result.headline }}</span>
-    </div>
-    <div class="circulation">
-      {% if result.circulation_ok %}Every room reachable from the entry.
-      {% else %}<span class="warn">Unreachable from the entry: {{ result.unreachable | join(", ") }}</span>{% endif %}
-      {% if result.cross and result.cross.failed %}
-        <span class="warn">· connector not satisfied: {{ result.cross.failed | map("join", " – ") | join(", ") }}</span>
-      {% endif %}
-    </div>
-
-    <div class="drawing-wrap">{{ result.svg | safe }}</div>
-
-    <div class="drawing-controls">
-      <span class="zoom-hint">Drag to pan · scroll or pinch to zoom</span>
-      <div class="drawing-controls-buttons">
-        <button type="button" class="download-btn" id="copy-link"
-                data-share-url="{{ url_for('index', area=form.area, beds=form.beds, baths=form.baths, shape=form.shape, style=form.style, _external=True) }}">Copy link</button>
-        <button type="button" class="download-btn" id="reset-view">Reset view</button>
-      </div>
-    </div>
-
-    <button type="button" class="download-btn" id="download-svg">Download sheet</button>
-
-    <details>
-      <summary>How this was built</summary>
-      <div class="solver-info">
-        <span>Status <b>{{ result.status }}</b></span>
-        <span>Solve time <b>{{ result.elapsed }}s</b>{% if result.zoned %} <b>(zoned)</b>{% endif %}</span>
-        <span>Footprint <b>{{ result.footprint }}</b></span>
-        <span>Total area <b>{{ result.total }} sf</b></span>
-      </div>
-    </details>
-  </div>
+    {% include "_drawing_result.html" %}
   {% elif sample_svg %}
   <div class="drawing-col">
     <div class="headline"><span class="num">{{ sample_caption }}</span></div>
@@ -303,35 +270,10 @@
     <p class="hint">This is a cached example. Fill in the form and click "Draw this house" to generate your own.</p>
   </div>
   {% endif %}
+  </div>
 </div>
 
-{% if result %}
-<table>
-  <tr><th>Room</th><th>Area</th><th>Target</th><th>Delta</th></tr>
-  {% set ns = namespace(group="") %}
-  {% for r in result.rooms %}
-    {% if r.group != ns.group %}
-    <tr class="group-row"><td colspan="4">{{ r.group }}</td></tr>
-    {% set ns.group = r.group %}
-    {% endif %}
-    <tr data-room="{{ r.raw_name }}">
-      <td><span class="swatch" style="background:{{ r.swatch }}"></span>{{ r.name }}</td>
-      <td>{{ r.area }} sf</td>
-      <td>{{ r.target }} sf</td>
-      <td class="{{ 'delta-miss' if r.delta|abs > 10 else '' }}">{{ "%+d" | format(r.delta) }}</td>
-    </tr>
-  {% endfor %}
-</table>
-{% endif %}
-
 <script>
-  document.getElementById('plan-form').addEventListener('submit', function () {
-    var btn = document.getElementById('generate-btn');
-    btn.disabled = true;
-    btn.textContent = 'Searching layouts…';
-    document.getElementById('loading-bar').hidden = false;
-  });
-
   document.querySelectorAll('.stepper').forEach(function (stepper) {
     var input = stepper.querySelector('input');
     var min = parseInt(stepper.dataset.min, 10);
@@ -362,182 +304,273 @@
     });
   });
 
-  document.querySelectorAll('[data-room]').forEach(function (el) {
-    el.addEventListener('mouseenter', function () {
-      document.querySelectorAll('[data-room="' + CSS.escape(el.dataset.room) + '"]')
-        .forEach(function (m) { m.classList.add('room-hover'); });
-    });
-    el.addEventListener('mouseleave', function () {
-      document.querySelectorAll('[data-room="' + CSS.escape(el.dataset.room) + '"]')
-        .forEach(function (m) { m.classList.remove('room-hover'); });
-    });
+  // Everything below re-binds against whatever is currently inside
+  // #drawing-col-wrap -- called once on initial page load, and again after
+  // a successful fetch-based submit swaps in a fresh result fragment (see
+  // the submit handler at the bottom), since DOM nodes removed by that
+  // swap take their old listeners with them.
+
+  // tappedRoom lives at module scope (not inside initRoomHoverSync) since
+  // the per-element listeners get re-wired on every fresh drawing-col-wrap
+  // swap, but the "tap elsewhere clears it" listener below only needs to
+  // exist once for the page's whole lifetime.
+  var tappedRoom = null;
+  function setRoomHighlight(name, on) {
+    document.querySelectorAll('[data-room="' + CSS.escape(name) + '"]')
+      .forEach(function (m) { m.classList.toggle('room-hover', on); });
+  }
+  document.addEventListener('click', function () {
+    if (tappedRoom) { setRoomHighlight(tappedRoom, false); tappedRoom = null; }
   });
 
-  // pan/zoom: rewrite the svg's own viewBox rather than a CSS transform, so
-  // stroke widths and text stay crisp at every zoom level. Base viewBox
-  // (the fit-to-container framing to_svg() renders) is read once and used
-  // both as the zoomed-out floor and as the pan-clamp bounds.
-  var drawingWrap = document.querySelector('.drawing-wrap');
-  var planSvg = drawingWrap && drawingWrap.querySelector('svg');
-  var view = null, base = null;
-
-  if (planSvg) {
-    var vb = planSvg.getAttribute('viewBox').split(/\s+/).map(Number);
-    base = { x: vb[0], y: vb[1], w: vb[2], h: vb[3] };
-    view = { x: base.x, y: base.y, w: base.w, h: base.h };
-  }
-
-  var MIN_SCALE = 1, MAX_SCALE = 8;
-
-  function applyView() {
-    planSvg.setAttribute('viewBox', view.x + ' ' + view.y + ' ' + view.w + ' ' + view.h);
-  }
-
-  function clampPan() {
-    var minX = base.x, maxX = base.x + base.w - view.w;
-    view.x = Math.min(Math.max(view.x, minX), Math.max(minX, maxX));
-    var minY = base.y, maxY = base.y + base.h - view.h;
-    view.y = Math.min(Math.max(view.y, minY), Math.max(minY, maxY));
-  }
-
-  function screenToSvg(clientX, clientY) {
-    var rect = planSvg.getBoundingClientRect();
-    var px = (clientX - rect.left) / rect.width;
-    var py = (clientY - rect.top) / rect.height;
-    return { x: view.x + px * view.w, y: view.y + py * view.h };
-  }
-
-  function zoomAt(clientX, clientY, factor) {
-    var pt = screenToSvg(clientX, clientY);
-    var newW = view.w / factor, newH = view.h / factor;
-    var scale = base.w / newW;
-    if (scale < MIN_SCALE) { newW = base.w; newH = base.h; }
-    if (scale > MAX_SCALE) { newW = base.w / MAX_SCALE; newH = base.h / MAX_SCALE; }
-    var px = (pt.x - view.x) / view.w, py = (pt.y - view.y) / view.h;
-    view.w = newW; view.h = newH;
-    view.x = pt.x - px * view.w;
-    view.y = pt.y - py * view.h;
-    clampPan();
-    applyView();
-  }
-
-  function panBy(dxPixels, dyPixels) {
-    var rect = planSvg.getBoundingClientRect();
-    view.x -= dxPixels / rect.width * view.w;
-    view.y -= dyPixels / rect.height * view.h;
-    clampPan();
-    applyView();
-  }
-
-  function touchDist(touches) {
-    var dx = touches[0].clientX - touches[1].clientX;
-    var dy = touches[0].clientY - touches[1].clientY;
-    return Math.sqrt(dx * dx + dy * dy);
-  }
-  function touchMid(touches) {
-    return { x: (touches[0].clientX + touches[1].clientX) / 2,
-             y: (touches[0].clientY + touches[1].clientY) / 2 };
-  }
-
-  if (planSvg) {
-    planSvg.addEventListener('wheel', function (e) {
-      e.preventDefault();
-      zoomAt(e.clientX, e.clientY, e.deltaY < 0 ? 1.15 : 1 / 1.15);
-    }, { passive: false });
-
-    var dragging = false, lastX = 0, lastY = 0;
-    planSvg.addEventListener('mousedown', function (e) {
-      e.preventDefault(); // avoid native text selection while dragging over room labels
-      dragging = true; lastX = e.clientX; lastY = e.clientY;
-      planSvg.classList.add('panning');
-    });
-    window.addEventListener('mousemove', function (e) {
-      if (!dragging) return;
-      panBy(e.clientX - lastX, e.clientY - lastY);
-      lastX = e.clientX; lastY = e.clientY;
-    });
-    window.addEventListener('mouseup', function () {
-      dragging = false;
-      planSvg.classList.remove('panning');
-    });
-
-    var touchState = null;
-    planSvg.addEventListener('touchstart', function (e) {
-      if (e.touches.length === 1) {
-        touchState = { mode: 'pan', x: e.touches[0].clientX, y: e.touches[0].clientY };
-      } else if (e.touches.length === 2) {
-        touchState = { mode: 'pinch', dist: touchDist(e.touches) };
-      }
-    }, { passive: true });
-
-    planSvg.addEventListener('touchmove', function (e) {
-      if (!touchState) return;
-      e.preventDefault();
-      if (touchState.mode === 'pan' && e.touches.length === 1) {
-        var t = e.touches[0];
-        panBy(t.clientX - touchState.x, t.clientY - touchState.y);
-        touchState.x = t.clientX; touchState.y = t.clientY;
-      } else if (touchState.mode === 'pinch' && e.touches.length === 2) {
-        var newDist = touchDist(e.touches);
-        var mid = touchMid(e.touches);
-        zoomAt(mid.x, mid.y, newDist / touchState.dist);
-        touchState.dist = newDist;
-      }
-    }, { passive: false });
-
-    planSvg.addEventListener('touchend', function (e) {
-      if (e.touches.length === 0) touchState = null;
-      else if (e.touches.length === 1) {
-        touchState = { mode: 'pan', x: e.touches[0].clientX, y: e.touches[0].clientY };
-      }
-    }, { passive: true });
-  }
-
-  var resetViewBtn = document.getElementById('reset-view');
-  if (resetViewBtn) {
-    resetViewBtn.addEventListener('click', function () {
-      view = { x: base.x, y: base.y, w: base.w, h: base.h };
-      applyView();
-    });
-  }
-
-  var copyLinkBtn = document.getElementById('copy-link');
-  if (copyLinkBtn) {
-    copyLinkBtn.addEventListener('click', function () {
-      var url = copyLinkBtn.dataset.shareUrl;
-      var original = copyLinkBtn.textContent;
-      navigator.clipboard.writeText(url).then(function () {
-        copyLinkBtn.textContent = 'Copied!';
-        setTimeout(function () { copyLinkBtn.textContent = original; }, 1500);
-      }, function () {
-        copyLinkBtn.textContent = 'Copy failed';
-        setTimeout(function () { copyLinkBtn.textContent = original; }, 1500);
+  function initRoomHoverSync() {
+    document.querySelectorAll('[data-room]').forEach(function (el) {
+      el.addEventListener('mouseenter', function () {
+        if (!tappedRoom) setRoomHighlight(el.dataset.room, true);
+      });
+      el.addEventListener('mouseleave', function () {
+        if (!tappedRoom) setRoomHighlight(el.dataset.room, false);
+      });
+      // tap-to-lock: mouseenter/mouseleave alone don't help touch users
+      // pair a room with its schedule row, since there's no hover state to
+      // land on -- a tap toggles a highlight that sticks until the room is
+      // tapped again or the tap lands elsewhere on the page.
+      el.addEventListener('click', function (e) {
+        e.stopPropagation();
+        if (tappedRoom === el.dataset.room) {
+          setRoomHighlight(tappedRoom, false);
+          tappedRoom = null;
+        } else {
+          if (tappedRoom) setRoomHighlight(tappedRoom, false);
+          tappedRoom = el.dataset.room;
+          setRoomHighlight(tappedRoom, true);
+        }
       });
     });
   }
 
-  var downloadBtn = document.getElementById('download-svg');
-  if (downloadBtn) {
-    downloadBtn.addEventListener('click', function () {
-      var svg = document.querySelector('.drawing-col svg');
-      if (!svg) return;
-      // serialize the full fit-to-page framing, not whatever's currently
-      // panned/zoomed into view
-      var liveViewBox = svg.getAttribute('viewBox');
-      if (base) svg.setAttribute('viewBox', base.x + ' ' + base.y + ' ' + base.w + ' ' + base.h);
-      var source = '<?xml version="1.0" standalone="no"?>\r\n' + new XMLSerializer().serializeToString(svg);
-      if (base) svg.setAttribute('viewBox', liveViewBox);
-      var blob = new Blob([source], {type: 'image/svg+xml;charset=utf-8'});
-      var url = URL.createObjectURL(blob);
-      var a = document.createElement('a');
-      a.href = url;
-      a.download = 'floor-plan.svg';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    });
+  // pan/zoom: rewrite the svg's own viewBox rather than a CSS transform, so
+  // stroke widths and text stay crisp at every zoom level. Base viewBox
+  // (the fit-to-container framing to_svg() renders) is read once per
+  // drawing and used both as the zoomed-out floor and as the pan-clamp
+  // bounds -- also wires copy-link/download-svg/reset-view, since those
+  // buttons only exist alongside a real drawing.
+  function initDrawingInteractions() {
+    var drawingWrap = document.querySelector('.drawing-wrap');
+    var planSvg = drawingWrap && drawingWrap.querySelector('svg');
+    var view = null, base = null;
+
+    if (planSvg) {
+      var vb = planSvg.getAttribute('viewBox').split(/\s+/).map(Number);
+      base = { x: vb[0], y: vb[1], w: vb[2], h: vb[3] };
+      view = { x: base.x, y: base.y, w: base.w, h: base.h };
+    }
+
+    var MIN_SCALE = 1, MAX_SCALE = 8;
+
+    function applyView() {
+      planSvg.setAttribute('viewBox', view.x + ' ' + view.y + ' ' + view.w + ' ' + view.h);
+    }
+
+    function clampPan() {
+      var minX = base.x, maxX = base.x + base.w - view.w;
+      view.x = Math.min(Math.max(view.x, minX), Math.max(minX, maxX));
+      var minY = base.y, maxY = base.y + base.h - view.h;
+      view.y = Math.min(Math.max(view.y, minY), Math.max(minY, maxY));
+    }
+
+    function screenToSvg(clientX, clientY) {
+      var rect = planSvg.getBoundingClientRect();
+      var px = (clientX - rect.left) / rect.width;
+      var py = (clientY - rect.top) / rect.height;
+      return { x: view.x + px * view.w, y: view.y + py * view.h };
+    }
+
+    function zoomAt(clientX, clientY, factor) {
+      var pt = screenToSvg(clientX, clientY);
+      var newW = view.w / factor, newH = view.h / factor;
+      var scale = base.w / newW;
+      if (scale < MIN_SCALE) { newW = base.w; newH = base.h; }
+      if (scale > MAX_SCALE) { newW = base.w / MAX_SCALE; newH = base.h / MAX_SCALE; }
+      var px = (pt.x - view.x) / view.w, py = (pt.y - view.y) / view.h;
+      view.w = newW; view.h = newH;
+      view.x = pt.x - px * view.w;
+      view.y = pt.y - py * view.h;
+      clampPan();
+      applyView();
+    }
+
+    function panBy(dxPixels, dyPixels) {
+      var rect = planSvg.getBoundingClientRect();
+      view.x -= dxPixels / rect.width * view.w;
+      view.y -= dyPixels / rect.height * view.h;
+      clampPan();
+      applyView();
+    }
+
+    function touchDist(touches) {
+      var dx = touches[0].clientX - touches[1].clientX;
+      var dy = touches[0].clientY - touches[1].clientY;
+      return Math.sqrt(dx * dx + dy * dy);
+    }
+    function touchMid(touches) {
+      return { x: (touches[0].clientX + touches[1].clientX) / 2,
+               y: (touches[0].clientY + touches[1].clientY) / 2 };
+    }
+
+    if (planSvg) {
+      planSvg.addEventListener('wheel', function (e) {
+        e.preventDefault();
+        zoomAt(e.clientX, e.clientY, e.deltaY < 0 ? 1.15 : 1 / 1.15);
+      }, { passive: false });
+
+      var dragging = false, lastX = 0, lastY = 0;
+      planSvg.addEventListener('mousedown', function (e) {
+        e.preventDefault(); // avoid native text selection while dragging over room labels
+        dragging = true; lastX = e.clientX; lastY = e.clientY;
+        planSvg.classList.add('panning');
+      });
+      window.addEventListener('mousemove', function (e) {
+        if (!dragging) return;
+        panBy(e.clientX - lastX, e.clientY - lastY);
+        lastX = e.clientX; lastY = e.clientY;
+      });
+      window.addEventListener('mouseup', function () {
+        dragging = false;
+        planSvg.classList.remove('panning');
+      });
+
+      var touchState = null;
+      planSvg.addEventListener('touchstart', function (e) {
+        if (e.touches.length === 1) {
+          touchState = { mode: 'pan', x: e.touches[0].clientX, y: e.touches[0].clientY };
+        } else if (e.touches.length === 2) {
+          touchState = { mode: 'pinch', dist: touchDist(e.touches) };
+        }
+      }, { passive: true });
+
+      planSvg.addEventListener('touchmove', function (e) {
+        if (!touchState) return;
+        e.preventDefault();
+        if (touchState.mode === 'pan' && e.touches.length === 1) {
+          var t = e.touches[0];
+          panBy(t.clientX - touchState.x, t.clientY - touchState.y);
+          touchState.x = t.clientX; touchState.y = t.clientY;
+        } else if (touchState.mode === 'pinch' && e.touches.length === 2) {
+          var newDist = touchDist(e.touches);
+          var mid = touchMid(e.touches);
+          zoomAt(mid.x, mid.y, newDist / touchState.dist);
+          touchState.dist = newDist;
+        }
+      }, { passive: false });
+
+      planSvg.addEventListener('touchend', function (e) {
+        if (e.touches.length === 0) touchState = null;
+        else if (e.touches.length === 1) {
+          touchState = { mode: 'pan', x: e.touches[0].clientX, y: e.touches[0].clientY };
+        }
+      }, { passive: true });
+    }
+
+    var resetViewBtn = document.getElementById('reset-view');
+    if (resetViewBtn) {
+      resetViewBtn.addEventListener('click', function () {
+        view = { x: base.x, y: base.y, w: base.w, h: base.h };
+        applyView();
+      });
+    }
+
+    var copyLinkBtn = document.getElementById('copy-link');
+    if (copyLinkBtn) {
+      copyLinkBtn.addEventListener('click', function () {
+        var url = copyLinkBtn.dataset.shareUrl;
+        var original = copyLinkBtn.textContent;
+        navigator.clipboard.writeText(url).then(function () {
+          copyLinkBtn.textContent = 'Copied!';
+          setTimeout(function () { copyLinkBtn.textContent = original; }, 1500);
+        }, function () {
+          copyLinkBtn.textContent = 'Copy failed';
+          setTimeout(function () { copyLinkBtn.textContent = original; }, 1500);
+        });
+      });
+    }
+
+    var downloadBtn = document.getElementById('download-svg');
+    if (downloadBtn) {
+      downloadBtn.addEventListener('click', function () {
+        var svg = document.querySelector('.drawing-col svg');
+        if (!svg) return;
+        // serialize the full fit-to-page framing, not whatever's currently
+        // panned/zoomed into view
+        var liveViewBox = svg.getAttribute('viewBox');
+        if (base) svg.setAttribute('viewBox', base.x + ' ' + base.y + ' ' + base.w + ' ' + base.h);
+        var source = '<?xml version="1.0" standalone="no"?>\r\n' + new XMLSerializer().serializeToString(svg);
+        if (base) svg.setAttribute('viewBox', liveViewBox);
+        var blob = new Blob([source], {type: 'image/svg+xml;charset=utf-8'});
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = 'floor-plan.svg';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      });
+    }
   }
+
+  initRoomHoverSync();
+  initDrawingInteractions();
+
+  function showError(message) {
+    var box = document.getElementById('error-box');
+    box.innerHTML = '';
+    if (!message) return;
+    var div = document.createElement('div');
+    div.className = 'error';
+    div.textContent = message;
+    box.appendChild(div);
+  }
+
+  // Non-blocking submit: a plain <form method="post"> would navigate the
+  // tab away for the whole ~10-45s solve, leaving a blank/unloading page
+  // behind the loading bar below. Posting to /solve via fetch() instead
+  // keeps the page alive and the loading bar actually visible for the
+  // full wait. This doesn't reduce solve latency -- see app.py's
+  // /solve route -- it only removes the blank-tab experience.
+  var planForm = document.getElementById('plan-form');
+  planForm.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var btn = document.getElementById('generate-btn');
+    var originalLabel = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Searching layouts…';
+    document.getElementById('loading-bar').hidden = false;
+
+    fetch('/solve', { method: 'POST', body: new FormData(planForm) })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data.ok) {
+          showError(null);
+          document.getElementById('drawing-col-wrap').innerHTML = data.drawing_html;
+          document.getElementById('layout').classList.add('has-result');
+          document.getElementById('presets').hidden = true;
+          document.getElementById('legend').hidden = false;
+          initRoomHoverSync();
+          initDrawingInteractions();
+        } else {
+          showError(data.error);
+        }
+      })
+      .catch(function () {
+        showError('Something went wrong talking to the server. Try again.');
+      })
+      .finally(function () {
+        btn.disabled = false;
+        btn.textContent = originalLabel;
+        document.getElementById('loading-bar').hidden = true;
+      });
+  });
 </script>
 
 </body>

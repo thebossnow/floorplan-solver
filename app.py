@@ -18,11 +18,11 @@ import os
 import time
 from datetime import date
 
-from flask import Flask, render_template, request
+from flask import Flask, jsonify, render_template, request
 
 from generator import (HALLWAYS, MAX_AREA, MAX_BATHS, MAX_BEDS, MIN_AREA, PRODUCTION_WEIGHTS,
-                        STYLES, default_proximity, generate_program, shelf_pack_hint,
-                        zone_of_program)
+                        STYLES, ZONE_ROOM_THRESHOLD, default_proximity, generate_program,
+                        shelf_pack_hint, zone_of_program)
 from layout import FILL_BY_KIND, circulation_ok, display_name, place_openings, room_kind, solve, to_svg
 from zoning import solve_zoned
 
@@ -33,13 +33,21 @@ GROUP_BY_KIND = {"living": "Public", "hall": "Public", "sleep": "Private",
 GROUP_ORDER = ["Public", "Private", "Service"]
 
 TIME_LIMIT = 25.0
-ZONE_ROOM_THRESHOLD = 14   # more rooms than this: split into zones instead --
-                           # matches README's documented ">15 rooms slows down"
-                           # (a 15-room 4-bed/3-bath open_concept program was the
-                           # one found genuinely INFEASIBLE unzoned in testing);
-                           # the default 3-bed/2-bath program is 14 rooms and
-                           # solves fine unzoned, so this shouldn't fire for typical inputs
-ZONE_TIME_LIMIT = 15.0     # per zone, so a worst-case zoned solve is 2x this
+# The unzoned path's default/most-common config (the empty-state sample and
+# first preset chip) was found to plateau on its primal incumbent within a
+# few seconds while CP-SAT's bound spent the rest of TIME_LIMIT crawling
+# toward a proof that never arrives (~25% gap left at the cap) -- profiled
+# with CpSolver.parameters.log_search_progress per HANDOFF's documented
+# technique. NO_IMPROVEMENT_TIMEOUT cuts that plateau short at negligible
+# quality cost (roughly full-TIME_LIMIT solution quality, empirically).
+NO_IMPROVEMENT_TIMEOUT = 8.0
+# ZONE_ROOM_THRESHOLD lives in generator.py now -- zone_of_program() needs it
+# too, to decide when to split "private" further into "suite"/"wing".
+SOLVE_TIME_BUDGET = 45.0  # total wall-clock ceiling for a zoned solve, shared
+                          # across however many zones the program has (see
+                          # zoning.solve_zoned's time_budget param) -- leaves
+                          # ~15s margin under Vercel's 60s function maxDuration
+                          # for cold start + render, regardless of zone count
 
 # empty-state sample: a pre-solved SVG cached to disk (regenerate via the
 # one-off script this file's git history/HANDOFF notes, or by hand: run
@@ -74,19 +82,23 @@ def _room_rows(plan):
     return rows
 
 
-@app.route("/", methods=["GET", "POST"])
-def index():
+def _run_solve(source, attempt):
+    """Runs one form submission through generate_program() -> solve()/
+    solve_zoned() -> to_svg(), exactly the way both the plain POST/GET-with-
+    querystring index() route and the fetch-based /solve route need it.
+    attempt: whether to actually try (index()'s GET path only wants this
+    when query params are present -- a bare GET just prefills the form --
+    while both a real POST and /solve always attempt, even if `source`
+    itself turns out empty, matching index()'s original
+    `request.method == "POST" or source` condition). Returns (form, result,
+    error) -- form is always populated (defaults if not attempted),
+    result/error follow index()'s original meaning (exactly one of them
+    non-None after a real attempt, both None otherwise)."""
     form = dict(area=1500, beds=3, baths=2, shape="rectangular", style="traditional")
     result = None
     error = None
 
-    # a GET with query params is a "copy link" visit reproducing a past
-    # result (see templates/index.html's Copy link button, which builds
-    # this same area/beds/baths/shape/style querystring via url_for) --
-    # solve immediately rather than just prefilling the form, so the link
-    # is a true "see this exact result" link, not just a starting point
-    source = request.form if request.method == "POST" else request.args
-    if request.method == "POST" or source:
+    if attempt:
         try:
             form["area"] = int(source.get("area", ""))
             form["beds"] = int(source.get("beds", ""))
@@ -117,7 +129,7 @@ def index():
             if zoned:
                 zone_of = zone_of_program(rooms)
                 plan, status, cross, zone_metrics = solve_zoned(
-                    fp, rooms, adj, zone_of, time_limit=ZONE_TIME_LIMIT, workers=8,
+                    fp, rooms, adj, zone_of, time_budget=SOLVE_TIME_BUDGET, workers=8,
                     hallways=HALLWAYS, private=private,
                     weights=PRODUCTION_WEIGHTS, proximity=proximity)
             else:
@@ -125,11 +137,12 @@ def index():
                 plan, status, objective_value, best_objective_bound, solver_wall_time = solve(
                     fp, rooms, adj, time_limit=TIME_LIMIT, workers=8, hint=hint,
                     hallways=HALLWAYS, private=private,
+                    no_improvement_timeout=NO_IMPROVEMENT_TIMEOUT,
                     proximity=proximity, **PRODUCTION_WEIGHTS)
             elapsed = time.time() - t0
 
             if not plan:
-                budget = f"{2*ZONE_TIME_LIMIT:.0f}s" if zoned else f"{TIME_LIMIT:.0f}s"
+                budget = f"{SOLVE_TIME_BUDGET:.0f}s" if zoned else f"{TIME_LIMIT:.0f}s"
                 # solve()'s own wall_time (vs. this request's outer elapsed)
                 # tells the difference between "burned the whole time_limit
                 # with no incumbent" and "failed fast" (e.g. a quick proof of
@@ -150,11 +163,24 @@ def index():
                 )
                 svg_markup = to_svg(plan, fp, path=None, openings=openings, title_block=title_block)
                 ok, unreachable = circulation_ok(plan, "Entry", private=private)
+                # A capped solve can return FEASIBLE instead of OPTIMAL -- still
+                # a fully valid layout (every hard rule held), just not proven
+                # to be the single best arrangement. Compute this here, not in
+                # the template, since the zoned path's status is a concatenated
+                # "zone 'x': OPTIMAL, zone 'y': FEASIBLE" string that's only
+                # meaningful to parse once, against zone_metrics's own raw
+                # per-zone status (its 4th element -- see zoning.solve_zoned).
+                if zoned:
+                    is_optimal = zone_metrics is not None and all(
+                        st == "OPTIMAL" for (_, _, _, st) in zone_metrics.values())
+                else:
+                    is_optimal = status == "OPTIMAL"
                 result = dict(
                     svg=svg_markup,
                     headline=(f'{fp.width} × {fp.height} ft · {fp.area():,} sf · '
                                f'{form["beds"]} bed / {form["baths"]} bath'),
                     status=status,
+                    is_optimal=is_optimal,
                     zoned=zoned,
                     cross=cross,
                     elapsed=round(elapsed, 1),
@@ -170,6 +196,24 @@ def index():
         except ValueError as e:
             error = str(e)
 
+    return form, result, error
+
+
+@app.route("/", methods=["GET", "POST"])
+def index():
+    # a GET with query params is a "copy link" visit reproducing a past
+    # result (see templates/index.html's Copy link button, which builds
+    # this same area/beds/baths/shape/style querystring via url_for) --
+    # solve immediately rather than just prefilling the form, so the link
+    # is a true "see this exact result" link, not just a starting point.
+    # This route stays a plain full-page POST/GET -- it's the no-JS
+    # fallback (see templates/index.html's submit handler, which normally
+    # intercepts the form and posts to /solve instead) and the target for
+    # copy-link visits, both of which want a real page load either way.
+    source = request.form if request.method == "POST" else request.args
+    attempt = request.method == "POST" or bool(source)
+    form, result, error = _run_solve(source, attempt)
+
     return render_template(
         "index.html", form=form, result=result, error=error,
         max_beds=MAX_BEDS, max_baths=MAX_BATHS, min_area=MIN_AREA, max_area=MAX_AREA,
@@ -177,6 +221,24 @@ def index():
         living=FILL_BY_KIND["living"], sleep=FILL_BY_KIND["sleep"], wet=FILL_BY_KIND["wet"],
         sample_svg=SAMPLE_SVG, sample_caption=SAMPLE_CAPTION, presets=PRESETS,
     )
+
+
+@app.route("/solve", methods=["POST"])
+def solve_route():
+    """fetch()-based submit target (see templates/index.html) -- runs the
+    exact same _run_solve() as index(), but returns just the drawing-col
+    fragment's HTML (for a success) or the error string (for a failure)
+    instead of a full page, so the browser tab never navigates away during
+    the ~10-45s solve. Doesn't reduce total solve latency -- Vercel's
+    Python functions don't keep state between invocations, so a real
+    background-job-plus-polling design would need external infra (a
+    datastore) this project doesn't have yet -- it only removes the blank/
+    unloading-tab experience of a full-page POST."""
+    form, result, error = _run_solve(request.form, True)
+    if not result:
+        return jsonify(ok=False, error=error, form=form)
+    drawing_html = render_template("_drawing_result.html", result=result, form=form)
+    return jsonify(ok=True, drawing_html=drawing_html, form=form)
 
 
 if __name__ == "__main__":

@@ -14,6 +14,8 @@ Units are integer feet on a 1ft grid. Change GRID to use 6in units.
 """
 
 import re
+import threading
+import time
 from dataclasses import dataclass, field
 from typing import List, Dict, Tuple, Optional, Iterable
 from ortools.sat.python import cp_model
@@ -298,6 +300,23 @@ def _guideline_usage(m, dim, edges, tag):
     return used
 
 
+class _ImprovementTracker(cp_model.CpSolverSolutionCallback):
+    """Records the wall-clock time of the most recent incumbent, so a
+    separate timer thread (see solve()'s no_improvement_timeout handling)
+    can detect a stalled search and stop it early. There's no purely
+    solution-callback-based way to detect the *absence* of an improvement
+    -- on_solution_callback only fires when a new incumbent actually
+    lands -- so a live thread polling this tracker is the only way to act
+    on "nothing has improved in N seconds"."""
+
+    def __init__(self):
+        super().__init__()
+        self.last_improvement = time.time()
+
+    def on_solution_callback(self):
+        self.last_improvement = time.time()
+
+
 def solve(footprint: Footprint,
           rooms: List[Room],
           adjacencies: List[Adj],
@@ -311,6 +330,7 @@ def solve(footprint: Footprint,
           aspect_penalty_weight: int = 0,
           compactness_weight: int = 0,
           alignment_weight: int = 0,
+          no_improvement_timeout: Optional[float] = None,
           proximity: Optional[List[Proximity]] = None,
           proximity_weight: int = 0):
     """Returns (plan, status, objective_value, best_objective_bound,
@@ -344,7 +364,20 @@ def solve(footprint: Footprint,
     the rooms exempt from this (closets, ensuite baths -- anything meant by
     design to have its only door open onto its owner room instead, per
     add_closets()). Leaving hallways empty/omitted (the default) skips the
-    constraint entirely, so existing callers are unaffected."""
+    constraint entirely, so existing callers are unaffected.
+
+    no_improvement_timeout: opt-in early stop. When None (the default),
+    behavior is unchanged -- CP-SAT keeps searching for OPTIMAL until
+    time_limit regardless of whether it's found a good incumbent early.
+    When given, a solve where the primal plateaus (no better incumbent for
+    this many seconds) while the bound is still crawling toward a proof
+    that may never arrive before time_limit gets cut short at whatever
+    incumbent it already has, returning FEASIBLE instead of burning the
+    rest of time_limit for no improvement. Diagnose with
+    CpSolver.parameters.log_search_progress (see HANDOFF/README) before
+    picking a value -- this only helps when the primal itself plateaus
+    early; a search that hasn't found *any* incumbent yet has nothing for
+    this to detect."""
 
     validate_program(footprint, rooms, adjacencies, hallways, private, proximity)
 
@@ -560,7 +593,32 @@ def solve(footprint: Footprint,
     s.parameters.max_time_in_seconds = time_limit
     s.parameters.num_workers = workers
     s.parameters.random_seed = seed
-    status = s.solve(m)
+
+    if no_improvement_timeout is None:
+        status = s.solve(m)
+    else:
+        # StopSearch() is documented as safe to call from a thread other
+        # than the one running Solve() -- the intended way to cancel a
+        # search externally. The watcher polls every 0.5s rather than
+        # relying on a timer firing exactly at the timeout, since the
+        # tracker's last_improvement can itself only update when
+        # on_solution_callback fires.
+        tracker = _ImprovementTracker()
+        stop_event = threading.Event()
+
+        def _watch():
+            while not stop_event.wait(0.5):
+                if time.time() - tracker.last_improvement >= no_improvement_timeout:
+                    s.stop_search()
+                    return
+
+        watcher = threading.Thread(target=_watch, daemon=True)
+        watcher.start()
+        try:
+            status = s.solve(m, tracker)
+        finally:
+            stop_event.set()
+            watcher.join(timeout=1)
 
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         # no incumbent -- s.objective_value/best_objective_bound silently
@@ -841,16 +899,48 @@ def _title_block_svg(x0, y0, width, title, lines):
     return p
 
 
-def _exterior_dims(W, H, scale):
+def _exterior_dims(W, H, scale, plan=None):
     """Overall width (top) and depth (left) dimension strings with
-    extension ticks -- no per-room span callouts, just the two overalls."""
+    extension ticks. When `plan` is given, also marks each room-to-room
+    span along those same two edges: minor ticks at every point a room
+    boundary actually touches that wall, plus a small span label tucked
+    into the gap between the dimension line and the building edge itself
+    (rather than a second stacked row) wherever there's room for one --
+    keeps this additive without needing more margin or risking overlap
+    with the north arrow, which lives further out past the overall line."""
     p = []
+
+    def breaks_on_edge(along_x):
+        """Sorted, deduped feet-coordinates (x for the top edge, y for the
+        left edge) where some room part's boundary actually touches that
+        wall -- always includes both ends even with no plan."""
+        pts = {0, W if along_x else H}
+        if plan:
+            for room in plan.values():
+                for part in room["parts"]:
+                    if along_x and part["y2"] == H:
+                        pts.add(part["x1"]); pts.add(part["x2"])
+                    elif not along_x and part["x1"] == 0:
+                        pts.add(part["y1"]); pts.add(part["y2"])
+        return sorted(pts)
+
+    MIN_SPAN_LABEL_PX = 32  # skip a span's number if it'd be too cramped to read
+
     y = -9
     p.append(f'<line x1="0" y1="{y}" x2="{W*scale}" y2="{y}" stroke="{INK}" stroke-width="1"/>')
     for x in (0, W * scale):
         p.append(f'<line x1="{x}" y1="0" x2="{x}" y2="{y}" stroke="{INK}" stroke-width="0.75" opacity="0.6"/>')
     p.append(f'<text x="{W*scale/2}" y="{y-3}" font-family="{FONT_MONO}" font-size="9.5" '
              f'text-anchor="middle" fill="{INK}">{W}\'-0"</text>')
+    xb = breaks_on_edge(True)
+    for gx in xb[1:-1]:
+        p.append(f'<line x1="{gx*scale}" y1="2" x2="{gx*scale}" y2="{y}" '
+                 f'stroke="{INK}" stroke-width="0.5" opacity="0.45"/>')
+    for a, b in zip(xb, xb[1:]):
+        if (b - a) * scale >= MIN_SPAN_LABEL_PX:
+            p.append(f'<text x="{(a+b)/2*scale}" y="-2" font-family="{FONT_MONO}" font-size="8" '
+                     f'text-anchor="middle" fill="{INK}" opacity="0.75">{b-a}\'</text>')
+
     x = -24
     p.append(f'<line x1="{x}" y1="0" x2="{x}" y2="{H*scale}" stroke="{INK}" stroke-width="1"/>')
     for gy in (0, H * scale):
@@ -858,6 +948,17 @@ def _exterior_dims(W, H, scale):
     p.append(f'<text x="{x-4}" y="{H*scale/2}" font-family="{FONT_MONO}" font-size="9.5" '
              f'text-anchor="middle" fill="{INK}" transform="rotate(-90 {x-4} {H*scale/2})">'
              f'{H}\'-0"</text>')
+    yb = breaks_on_edge(False)
+    for gy in yb[1:-1]:
+        gy_svg = (H - gy) * scale
+        p.append(f'<line x1="-2" y1="{gy_svg}" x2="{x}" y2="{gy_svg}" '
+                 f'stroke="{INK}" stroke-width="0.5" opacity="0.45"/>')
+    for a, b in zip(yb, yb[1:]):
+        if (b - a) * scale >= MIN_SPAN_LABEL_PX:
+            mid_svg = (H - (a + b) / 2) * scale
+            p.append(f'<text x="-2" y="{mid_svg}" font-family="{FONT_MONO}" font-size="8" '
+                     f'text-anchor="middle" fill="{INK}" opacity="0.75" '
+                     f'transform="rotate(-90 -2 {mid_svg})">{b-a}\'</text>')
     return p
 
 
@@ -979,14 +1080,19 @@ def to_svg(plan, fp: Footprint, scale=14, path="plan.svg", openings=None,
                          f'font-size="8" text-anchor="middle" fill="{INK}" opacity="0.55">'
                          f'{dims}</text>')
         p.append('</g>')
+    # The boundary line sits on the exterior wall's centerline, same as the
+    # inset math above -- a stroke of exterior_thickness*scale (rather than
+    # a flat cosmetic width) renders it as that same wall's actual band,
+    # extending exterior_thickness/2 to each side of the line exactly like
+    # the room insets already assume.
     p.append(f'<rect x="0" y="0" width="{W*scale}" height="{H*scale}" '
-             f'fill="none" stroke="{INK}" stroke-width="2"/>')
+             f'fill="none" stroke="{INK}" stroke-width="{exterior_thickness*scale}"/>')
     for o in openings or []:
         if o["kind"] == "door":
             p.append(_door_svg(o, scale, H))
         else:
             p.extend(_window_svg(o, scale, H))
-    p.extend(_exterior_dims(W, H, scale))
+    p.extend(_exterior_dims(W, H, scale, plan))
     p.append(_north_arrow(W * scale - 6, -24))
     p.append(_scale_bar(0, H * scale + 18, scale))
     if title_block:

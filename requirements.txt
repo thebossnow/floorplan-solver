@@ -1,2 +1,8 @@
-ortools>=9.10
-flask>=3.0
+# Pinned, not >=: Vercel reinstalls this from scratch on every deploy (no
+# lockfile, no persistent venv like the VPS has), so an unpinned range can
+# silently resolve to a different version on a later deploy with no code
+# change of our own. Versions below are what's actually installed and
+# tested in this repo's own .venv as of the Vercel-cutover work (2026-09) --
+# bump deliberately, and re-run the full test_*.py suite after.
+ortools==9.15.6755
+flask==3.1.3
