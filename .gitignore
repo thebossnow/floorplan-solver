@@ -5,3 +5,4 @@ venv/
 *.png
 plan*.svg
 HANDOFF.md
+.vercel
