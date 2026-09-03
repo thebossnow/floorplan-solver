@@ -11,7 +11,8 @@ failing.
 Run: .venv/bin/python3 test_hard_rules.py
 """
 
-from layout import Room, Adj, Footprint, solve
+from generator import HALLWAYS, generate_program
+from layout import CLOSET_WIDTH_RATIO_MAX, CLOSET_WIDTH_RATIO_MIN, Room, Adj, Footprint, solve
 from rules import Ruleset
 
 
@@ -160,63 +161,29 @@ def check_closet_align_position():
 
 
 def check_closet_align_feasible():
-    """A normal bedroom/closet/hall program (generator.py-realistic
-    proportions, not the deliberately-tight infeasible cases above) with
-    the ruleset active -- solves, and the resulting plan actually holds
-    both closet_align sub-rules (verified independently, post-solve, not
-    just trusted from the solve status)."""
+    """A REAL generate_program()-produced house (not a hand-built
+    program) with the ruleset active -- solves, and the resulting plan
+    actually holds both closet_align sub-rules (verified independently,
+    post-solve, not just trusted from the solve status) for every
+    bedroom, not just Primary.
+
+    Deliberately not a hand-tuned synthetic case (an earlier version of
+    this test was): closet_align_width changed from exact equality to a
+    CLOSET_WIDTH_RATIO_MIN/MAX proportion band on 2026-09-02, specifically
+    because a hand-tuned case satisfying exact equality doesn't prove
+    anything about the band, and generate_program()'s own closet sizing
+    (CLOSET_PCT) changed in the same fix -- the real integration is what
+    actually matters here, not a synthetic room list. time_limit=60 (not
+    the app.py-production 25s): the ratio band is a real, non-trivial
+    constraint across three bedrooms at once, found empirically to need
+    more search time than a normal solve, which is an acceptable
+    tradeoff for opting into a ruleset, not treated as a bug to chase."""
     ruleset = Ruleset(id="test", hall_clear_width=6)
-    # Explicit (wide) min_area/max_area on all three, not just the default
-    # +/-15% of target -- exactly matching a bedroom/closet's dimension on
-    # whichever side they end up sharing, AND landing closet/hall on
-    # different sides of the bedroom, AND filling the footprint exactly,
-    # all simultaneously, is a much tighter exact-tiling problem than a
-    # normal solve -- found empirically (several tighter attempts came
-    # back genuinely INFEASIBLE, not just slow) that these three rules
-    # together need real room to maneuver, not just a plausible-looking
-    # area/footprint pairing.
-    fp = Footprint(width=29, height=22)  # 638 gu^2
-    rooms = [
-        Room("Primary", 300, min_dim=12, max_aspect=3.0, min_area=250, max_area=400),
-        Room("PrimaryCloset", 150, min_dim=6, max_aspect=6.0, needs_exterior=False,
-             min_area=50, max_area=300),
-        Room("Hall", 110, min_dim=6, max_aspect=8.0, needs_exterior=False,
-             min_area=50, max_area=250),
-    ]
-    adj = [
-        Adj("Primary", "PrimaryCloset", min_shared=4),
-        Adj("Hall", "Primary", min_shared=4),
-    ]
-    plan, status, _, _, _ = solve(fp, rooms, adj, time_limit=45, workers=8,
-                                   hallways=("Hall",), private=("PrimaryCloset",),
-                                   ruleset=ruleset)
+    fp, rooms, adj, private = generate_program(2200, 3, 2, style="traditional")
+    plan, status, _, _, _ = solve(fp, rooms, adj, time_limit=60, workers=8,
+                                   hallways=HALLWAYS, private=private, ruleset=ruleset)
     assert plan is not None, f"expected a plan, got status={status}"
 
-    def side(a_part, b_part):
-        if a_part["x2"] == b_part["x1"] or b_part["x2"] == a_part["x1"]:
-            return "vertical"
-        if a_part["y2"] == b_part["y1"] or b_part["y2"] == a_part["y1"]:
-            return "horizontal"
-        return None
-
-    bed, closet, hall = plan["Primary"]["parts"][0], plan["PrimaryCloset"]["parts"][0], plan["Hall"]["parts"][0]
-    bc_side = side(bed, closet)
-    bh_side = side(bed, hall)
-    assert bc_side is not None, "Primary/PrimaryCloset aren't actually touching"
-    assert bh_side is not None, "Primary/Hall aren't actually touching"
-    if bc_side == "vertical":
-        bh = bed["y2"] - bed["y1"]
-        ch = closet["y2"] - closet["y1"]
-        assert bh == ch, f"width mismatch: Primary h={bh}, PrimaryCloset h={ch}"
-    else:
-        bw = bed["x2"] - bed["x1"]
-        cw = closet["x2"] - closet["x1"]
-        assert bw == cw, f"width mismatch: Primary w={bw}, PrimaryCloset w={cw}"
-
-    # Same-side check: for each of the 4 concrete sides, closet and hall
-    # must not BOTH be touching Primary on that exact side ("vertical"/
-    # "horizontal" above is too coarse for this -- it doesn't distinguish
-    # W from E or S from N).
     def touches(part, other, side_name):
         if side_name == "W":
             return part["x1"] == other["x2"]
@@ -226,11 +193,34 @@ def check_closet_align_feasible():
             return part["y1"] == other["y2"]
         if side_name == "N":
             return part["y2"] == other["y1"]
-    for side_name in ("W", "E", "S", "N"):
-        assert not (touches(bed, closet, side_name) and touches(bed, hall, side_name)), (
-            f"PrimaryCloset and Hall both touch Primary's {side_name} side")
-    print("check_closet_align_feasible: OK -- width matched on the shared axis, "
-          "closet and hall confirmed on different sides of Primary")
+
+    bedrooms = [r.name for r in rooms
+                if (r.name == "Primary" or r.name.startswith("Bed")) and not r.name.endswith("Closet")]
+    for bedroom in bedrooms:
+        closet, hall = f"{bedroom}Closet", "Hall"
+        bed = plan[bedroom]["parts"][0]
+        cl = plan[closet]["parts"][0]
+        hl = plan[hall]["parts"][0]
+
+        vertical = bed["x2"] == cl["x1"] or cl["x2"] == bed["x1"]
+        horizontal = bed["y2"] == cl["y1"] or cl["y2"] == bed["y1"]
+        assert vertical or horizontal, f"{bedroom}/{closet} aren't actually touching"
+        if vertical:
+            bed_dim, closet_dim = bed["y2"] - bed["y1"], cl["y2"] - cl["y1"]
+        else:
+            bed_dim, closet_dim = bed["x2"] - bed["x1"], cl["x2"] - cl["x1"]
+        ratio = 100 * closet_dim / bed_dim
+        assert CLOSET_WIDTH_RATIO_MIN <= ratio <= CLOSET_WIDTH_RATIO_MAX, (
+            f"{bedroom}: closet dim {closet_dim} is {ratio:.0f}% of bedroom dim {bed_dim}, "
+            f"outside [{CLOSET_WIDTH_RATIO_MIN}, {CLOSET_WIDTH_RATIO_MAX}]%")
+
+        for side_name in ("W", "E", "S", "N"):
+            assert not (touches(bed, cl, side_name) and touches(bed, hl, side_name)), (
+                f"{bedroom}: {closet} and {hall} both touch its {side_name} side")
+
+    print(f"check_closet_align_feasible: OK -- {len(bedrooms)} bedrooms, each with its "
+          f"closet proportioned (within [{CLOSET_WIDTH_RATIO_MIN},{CLOSET_WIDTH_RATIO_MAX}]%) "
+          "to the shared axis and on a different side than the hall")
 
 
 if __name__ == "__main__":

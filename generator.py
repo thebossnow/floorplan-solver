@@ -57,7 +57,20 @@ PRIMARY_PCT = 0.167
 PRIMARY_BATH_PCT = 0.060
 BED_PCT = 0.117       # each secondary bedroom
 BATH_PCT = 0.042      # each secondary bathroom
-CLOSET_AREA = 80      # grid-units^2 (20 sf), carved out of each bedroom's own target
+
+# Each bedroom's closet is a percentage of that SAME bedroom's own target
+# area, carved out before the closet is subtracted -- not a flat constant
+# (that was the original design, CLOSET_AREA=80 regardless of bedroom
+# size) -- changed 2026-09-02 after Phase 7 integration testing found a
+# flat closet size geometrically incompatible with layout.solve()'s
+# closet_align_width rule for any real bedroom (a fixed 20sf closet can
+# never reach even 30% of an 11ft-min_dim Primary bedroom's width). Per
+# 2026-09-02 user review: "the closet theoretically is a part of the
+# bedroom, not an afterthought" -- CLOSET_PCT makes a bigger bedroom get
+# a bigger closet, same as every other proportional room share here.
+CLOSET_PCT = 0.15
+CLOSET_MIN_AREA = 60  # grid-units^2 floor, so a small secondary bedroom's
+                      # closet doesn't shrink toward nothing
 
 PRIMARY_FLOOR = 440   # 110 sf
 BED_FLOOR = 300       # 75 sf
@@ -234,8 +247,9 @@ def generate_program(total_area: int, beds: int = 3, baths: int = 2,
     bedroom_names = ["Primary"] + [f"Bed{i}" for i in range(2, beds + 1)]
     bathroom_names = ["PrimBath"] + [f"Bath{i}" for i in range(2, baths + 1)]
 
+    closet_areas = {b: max(round(targets[b] * CLOSET_PCT), CLOSET_MIN_AREA) for b in bedroom_names}
     for b in bedroom_names:
-        targets[b] = max(targets[b] - CLOSET_AREA, floors.get(b, BED_FLOOR))
+        targets[b] = max(targets[b] - closet_areas[b], floors.get(b, BED_FLOOR))
 
     rooms = []
     for name in public_names:
@@ -258,7 +272,7 @@ def generate_program(total_area: int, beds: int = 3, baths: int = 2,
     for i in range(2, baths + 1):
         adj.append(Adj("Hall", f"Bath{i}"))
 
-    rooms, adj = add_closets(rooms, adj, bedroom_names, area=CLOSET_AREA, min_dim=6, max_aspect=3.0)  # 3ft
+    rooms, adj = add_closets(rooms, adj, bedroom_names, area=closet_areas, min_dim=6, max_aspect=3.0)  # 3ft
 
     # only leaf rooms are private (can't be a hallway to somewhere else) --
     # bedrooms must stay non-private so BFS can relay through them to reach

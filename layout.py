@@ -178,6 +178,13 @@ def add_closets(rooms, adjacencies, bedrooms, area=80, min_dim=6, max_aspect=3.0
     meant to share the same reserved footprint; this helper doesn't
     touch the bedroom's target.
 
+    area: a single grid-units^2 value applied to every closet (the
+    original behavior), or a {bedroom_name: area} dict for per-bedroom
+    sizing -- generate_program() uses the latter so each closet is
+    proportional to its OWN bedroom (added 2026-09-02, alongside
+    layout.solve()'s closet_align_width rule -- see that rule's own
+    docstring for why a flat closet size doesn't work with it).
+
     Returns new (rooms, adjacencies) lists. Closet names are
     f"{bedroom}Closet"; include them in circulation_ok's `private` set
     so they're never treated as a hallway pass-through.
@@ -186,7 +193,8 @@ def add_closets(rooms, adjacencies, bedrooms, area=80, min_dim=6, max_aspect=3.0
     adjacencies = list(adjacencies)
     for b in bedrooms:
         closet = f"{b}Closet"
-        rooms.append(Room(closet, area, min_dim=min_dim, max_aspect=max_aspect,
+        closet_area = area[b] if isinstance(area, dict) else area
+        rooms.append(Room(closet, closet_area, min_dim=min_dim, max_aspect=max_aspect,
                            needs_exterior=False))
         adjacencies.append(Adj(b, closet, min_shared=min_shared))
     return rooms, adjacencies
@@ -354,6 +362,13 @@ class _ImprovementTracker(cp_model.CpSolverSolutionCallback):
 
     def on_solution_callback(self):
         self.last_improvement = time.time()
+
+
+# closet_align_width's proportion band (see that rule's own comment,
+# inside solve(), for the full story) -- module-level so it's visible/
+# documented in one place rather than buried inside the function body.
+CLOSET_WIDTH_RATIO_MIN = 30  # percent
+CLOSET_WIDTH_RATIO_MAX = 70  # percent
 
 
 def solve(footprint: Footprint,
@@ -745,25 +760,49 @@ def solve(footprint: Footprint,
             # not a new rule of its own.
             m.add_bool_or(bc_cases)
 
-            # width match: match the closet's dimension PERPENDICULAR to
-            # whichever wall ends up shared -- a vertical shared wall
-            # (bc_cases[0]/[1], the aRb/bRa cases) runs along y, so match
-            # h; a horizontal one (bc_cases[2]/[3], aTb/bTa) runs along x,
-            # so match w. bed_pk is always "a" in the _touch_cases() call
-            # above, so this indexing is consistent.
+            # width match: the closet's dimension PERPENDICULAR to
+            # whichever wall ends up shared should be a real, proportioned
+            # fraction of the bedroom's own matching dimension -- NOT
+            # exact equality. Originally implemented as == (matching the
+            # plan's literal wording), then changed 2026-09-02 after Phase
+            # 7 integration testing against generate_program()'s REAL
+            # output found it unconditionally INFEASIBLE: real closets
+            # (generator.py's old flat CLOSET_AREA, ~80 grid-units^2,
+            # max_aspect 3.0) top out around 15 grid-units on their
+            # longest side, while real bedrooms need >=18-22 -- zero
+            # overlap, so exact equality could never hold for any actual
+            # house (Phase 4's own tests missed this: they used
+            # artificially generous closet sizes, not generator.py's real
+            # ones). Fixed on both sides: generate_program() now sizes
+            # each closet as a percentage of its OWN bedroom (CLOSET_PCT)
+            # instead of a flat constant, and this rule became a band
+            # instead of equality. CLOSET_WIDTH_RATIO_MIN/MAX (30%-70%) are
+            # a judgment call, not derived from a code minimum -- "usually
+            # matches the width or length" in spirit (proportioned to the
+            # bedroom, not a tiny afterthought, but not literally equal
+            # either), per 2026-09-02 user review. A vertical shared wall
+            # (bc_cases[0]/[1], the aRb/bRa cases) runs along y, so this
+            # applies to h; a horizontal one (bc_cases[2]/[3], aTb/bTa)
+            # runs along x, so it applies to w. bed_pk is always "a" in
+            # the _touch_cases() call above, so this indexing is
+            # consistent.
+            ratio_terms = ((h[closet_pk], h[bed_pk], bc_cases[0]),
+                            (h[closet_pk], h[bed_pk], bc_cases[1]),
+                            (w[closet_pk], w[bed_pk], bc_cases[2]),
+                            (w[closet_pk], w[bed_pk], bc_cases[3]))
             if diagnose_infeasibility:
                 width_lit = m.new_bool_var(f"rule_closet_align_width_{bedroom}")
-                m.add(h[closet_pk] == h[bed_pk]).only_enforce_if([width_lit, bc_cases[0]])
-                m.add(h[closet_pk] == h[bed_pk]).only_enforce_if([width_lit, bc_cases[1]])
-                m.add(w[closet_pk] == w[bed_pk]).only_enforce_if([width_lit, bc_cases[2]])
-                m.add(w[closet_pk] == w[bed_pk]).only_enforce_if([width_lit, bc_cases[3]])
+                for closet_dim, bed_dim, case in ratio_terms:
+                    m.add(100 * closet_dim >= CLOSET_WIDTH_RATIO_MIN * bed_dim).only_enforce_if(
+                        [width_lit, case])
+                    m.add(100 * closet_dim <= CLOSET_WIDTH_RATIO_MAX * bed_dim).only_enforce_if(
+                        [width_lit, case])
                 m.add_assumption(width_lit)
                 lit_index_to_rule[width_lit.index] = f"closet_align_width:{bedroom}"
             else:
-                m.add(h[closet_pk] == h[bed_pk]).only_enforce_if(bc_cases[0])
-                m.add(h[closet_pk] == h[bed_pk]).only_enforce_if(bc_cases[1])
-                m.add(w[closet_pk] == w[bed_pk]).only_enforce_if(bc_cases[2])
-                m.add(w[closet_pk] == w[bed_pk]).only_enforce_if(bc_cases[3])
+                for closet_dim, bed_dim, case in ratio_terms:
+                    m.add(100 * closet_dim >= CLOSET_WIDTH_RATIO_MIN * bed_dim).only_enforce_if(case)
+                    m.add(100 * closet_dim <= CLOSET_WIDTH_RATIO_MAX * bed_dim).only_enforce_if(case)
 
             # position: closet must not land on the same side of the
             # bedroom as the bedroom's own hallway adjacency (the wall a
