@@ -365,7 +365,8 @@ def solve(footprint: Footprint,
           proximity: Optional[List[Proximity]] = None,
           proximity_weight: int = 0,
           diagnose_infeasibility: bool = False,
-          diagnosis_out: Optional[List["InfeasibilityDiagnosis"]] = None):
+          diagnosis_out: Optional[List["InfeasibilityDiagnosis"]] = None,
+          ruleset: Optional["rules.Ruleset"] = None):
     """Returns (plan, status, objective_value, best_objective_bound,
     wall_time). plan is None when status isn't OPTIMAL/FEASIBLE, and
     objective_value/best_objective_bound are None along with it (CP-SAT
@@ -430,7 +431,39 @@ def solve(footprint: Footprint,
     deferred future work (each shrink attempt costs a full re-solve).
     Zoned solves (zoning.solve_zoned()) don't support this -- diagnosis
     is unzoned-only for now, zoning's own anchor/retry logic has a
-    separate failure-attribution story."""
+    separate failure-attribution story.
+
+    ruleset: opt-in (default None = no ruleset rules at all, today's
+    behavior). A rules.Ruleset instance (not imported here -- see
+    InfeasibilityDiagnosis's own docstring for why layout.py stays
+    import-free) gates three additional hard rules, each a real CP-SAT
+    constraint, not a validator:
+      - hall clear width: every part of every room named in `hallways`
+        must be at least ruleset.hall_clear_width wide/tall -- same shape
+        as min_dim, just a separate (possibly stricter) floor scoped to
+        hallways specifically.
+      - setback envelope: for each (room, edge, distance) in
+        ruleset.setbacks, that room's part-0 boundary on `edge` must sit
+        at least `distance` grid-units in from the footprint's own
+        boundary on that side.
+      - closet alignment: auto-detected from `adjacencies` (any Adj where
+        exactly one side is room_kind()=="closet") rather than a separate
+        parameter -- for each (bedroom, closet) pair found this way, the
+        closet's dimension perpendicular to whichever wall they actually
+        end up sharing must match the bedroom's own (closet_align_width),
+        and the closet must not share the same side of the bedroom as the
+        bedroom's own hallway adjacency, i.e. not on the wall a door would
+        go on (closet_align_position -- no-ops for a bedroom with no
+        hallway adjacency to compare against, rather than erroring).
+    When diagnose_infeasibility is also True, each of these three is
+    wrapped behind its own assumption literal exactly like the four rules
+    above (rule ids "hall_clear_width:{part_key}",
+    "setback:{room}:{edge}", "closet_align_width:{bedroom}",
+    "closet_align_position:{bedroom}"); when False, they're plain hard
+    constraints instead (no literal, no assumption, zero diagnosis
+    overhead -- same "opt-in per axis" split as diagnose_infeasibility
+    itself: passing a ruleset doesn't force you to also pay for
+    diagnosis, and vice versa)."""
 
     validate_program(footprint, rooms, adjacencies, hallways, private, proximity)
     lit_index_to_rule: Dict[int, str] = {}
@@ -601,6 +634,137 @@ def solve(footprint: Footprint,
                 lit_index_to_rule[rule_lit.index] = f"door_access:{r.name}"
             else:
                 m.add_bool_or(lits)
+
+    # ------------------------------------------------------------------
+    # ruleset-gated new hard rules (opt-in via `ruleset` -- see solve()'s
+    # docstring): hall clear width, setback envelope, closet alignment.
+    # ------------------------------------------------------------------
+    if ruleset is not None:
+        # hall clear width: same shape as min_dim's own per-part gating
+        # above, just a separate (possibly stricter) floor scoped to
+        # `hallways` specifically. Doesn't need its own domain widening --
+        # it sits on top of w[pk]/h[pk]'s existing domain (tight or
+        # min_dim-widened, whichever diagnose_infeasibility already chose
+        # above), same as any other extra floor stacked on a variable.
+        for hn in (hallways or ()):
+            for pk in part_keys.get(hn, []):
+                if diagnose_infeasibility:
+                    rule_lit = m.new_bool_var(f"rule_hall_clear_width_{pk}")
+                    m.add(w[pk] >= ruleset.hall_clear_width).only_enforce_if(rule_lit)
+                    m.add(h[pk] >= ruleset.hall_clear_width).only_enforce_if(rule_lit)
+                    m.add_assumption(rule_lit)
+                    lit_index_to_rule[rule_lit.index] = f"hall_clear_width:{pk}"
+                else:
+                    m.add(w[pk] >= ruleset.hall_clear_width)
+                    m.add(h[pk] >= ruleset.hall_clear_width)
+
+        # setback envelope: (room, edge, distance) triples, applied to
+        # part 0 (same scoping as Room.edges/must_cover above) -- a room
+        # not present in this program is silently skipped rather than
+        # erroring, so one ruleset can be reused across programs that
+        # don't all contain every named room.
+        for room_name, edge, distance in ruleset.setbacks:
+            pks = part_keys.get(room_name, [])
+            if not pks:
+                continue
+            pk = pks[0]
+            if edge == "W":
+                con = m.add(x1[pk] >= distance)
+            elif edge == "E":
+                con = m.add(x2[pk] <= W - distance)
+            elif edge == "S":
+                con = m.add(y1[pk] >= distance)
+            elif edge == "N":
+                con = m.add(y2[pk] <= H - distance)
+            else:
+                raise ValueError(f"setback edge must be one of N/S/E/W, got {edge!r}")
+            if diagnose_infeasibility:
+                rule_lit = m.new_bool_var(f"rule_setback_{room_name}_{edge}")
+                con.only_enforce_if(rule_lit)
+                m.add_assumption(rule_lit)
+                lit_index_to_rule[rule_lit.index] = f"setback:{room_name}:{edge}"
+
+        # closet alignment: (bedroom, closet) pairs auto-detected from
+        # `adjacencies` (any Adj where exactly one side is
+        # room_kind()=="closet") rather than a separate parameter -- same
+        # naming convention add_closets()/generate_program() already use.
+        # A fresh, separate _touch_cases() call per pair (min_len=1, just
+        # "which side are they touching on", not enforcing the adjacency
+        # itself -- that's the main adjacency loop's own job above) --
+        # redundant with that loop's own literals, but never
+        # inconsistent with them: a stricter (ad.min_shared) touch is
+        # always also a looser (1) touch on the same side, so wherever
+        # the real adjacency holds, these derived literals agree with it.
+        hallway_set = set(hallways or ())
+        for ad in adjacencies:
+            a_closet, b_closet = room_kind(ad.a) == "closet", room_kind(ad.b) == "closet"
+            if a_closet == b_closet:
+                continue  # neither or both are closets -- not a bedroom/closet pair
+            bedroom, closet = (ad.b, ad.a) if a_closet else (ad.a, ad.b)
+            bed_pks, closet_pks = part_keys.get(bedroom, []), part_keys.get(closet, [])
+            if len(bed_pks) != 1 or len(closet_pks) != 1:
+                continue  # multi-part bedroom/closet: no-op, outside this rule's scope
+            bed_pk, closet_pk = bed_pks[0], closet_pks[0]
+            bc_cases = _touch_cases(m, W, H, x1, x2, y1, y2, bed_pk, closet_pk, 1,
+                                     f"closetalign_{bed_pk}_{closet_pk}")
+            # _touch_cases()'s literals are one-directional (.only_enforce_if
+            # only says "IF true THEN touching", never the converse), so
+            # without this, CP-SAT is free to leave every one of them False
+            # even though bedroom/closet really are touching somewhere
+            # (guaranteed by `ad`'s own mandatory enforcement above) --
+            # forcing at least one True is what makes them actually track
+            # reality. Always added (not gated by ruleset/diagnosis): it's
+            # bookkeeping that follows from `ad` already being mandatory,
+            # not a new rule of its own.
+            m.add_bool_or(bc_cases)
+
+            # width match: match the closet's dimension PERPENDICULAR to
+            # whichever wall ends up shared -- a vertical shared wall
+            # (bc_cases[0]/[1], the aRb/bRa cases) runs along y, so match
+            # h; a horizontal one (bc_cases[2]/[3], aTb/bTa) runs along x,
+            # so match w. bed_pk is always "a" in the _touch_cases() call
+            # above, so this indexing is consistent.
+            if diagnose_infeasibility:
+                width_lit = m.new_bool_var(f"rule_closet_align_width_{bedroom}")
+                m.add(h[closet_pk] == h[bed_pk]).only_enforce_if([width_lit, bc_cases[0]])
+                m.add(h[closet_pk] == h[bed_pk]).only_enforce_if([width_lit, bc_cases[1]])
+                m.add(w[closet_pk] == w[bed_pk]).only_enforce_if([width_lit, bc_cases[2]])
+                m.add(w[closet_pk] == w[bed_pk]).only_enforce_if([width_lit, bc_cases[3]])
+                m.add_assumption(width_lit)
+                lit_index_to_rule[width_lit.index] = f"closet_align_width:{bedroom}"
+            else:
+                m.add(h[closet_pk] == h[bed_pk]).only_enforce_if(bc_cases[0])
+                m.add(h[closet_pk] == h[bed_pk]).only_enforce_if(bc_cases[1])
+                m.add(w[closet_pk] == w[bed_pk]).only_enforce_if(bc_cases[2])
+                m.add(w[closet_pk] == w[bed_pk]).only_enforce_if(bc_cases[3])
+
+            # position: closet must not land on the same side of the
+            # bedroom as the bedroom's own hallway adjacency (the wall a
+            # door would go on) -- door position itself isn't a solve-time
+            # variable (place_openings() is post-solve), so the hallway
+            # wall stands in for "the door wall". No-ops (not an error)
+            # for a bedroom with no hallway adjacency to compare against.
+            hall_adj = next((oa for oa in adjacencies if bedroom in (oa.a, oa.b) and
+                              (oa.a in hallway_set or oa.b in hallway_set)), None)
+            if hall_adj is None:
+                continue
+            hall_name = hall_adj.a if hall_adj.a in hallway_set else hall_adj.b
+            hall_pks = part_keys.get(hall_name, [])
+            if len(hall_pks) != 1:
+                continue
+            hall_pk = hall_pks[0]
+            bh_cases = _touch_cases(m, W, H, x1, x2, y1, y2, bed_pk, hall_pk, 1,
+                                     f"closetalign_hall_{bed_pk}_{hall_pk}")
+            m.add_bool_or(bh_cases)  # same reasoning as bc_cases above
+            if diagnose_infeasibility:
+                pos_lit = m.new_bool_var(f"rule_closet_align_position_{bedroom}")
+                for i in range(4):
+                    m.add_bool_or([bc_cases[i].Not(), bh_cases[i].Not()]).only_enforce_if(pos_lit)
+                m.add_assumption(pos_lit)
+                lit_index_to_rule[pos_lit.index] = f"closet_align_position:{bedroom}"
+            else:
+                for i in range(4):
+                    m.add_bool_or([bc_cases[i].Not(), bh_cases[i].Not()])
 
     # ------------------------------------------------------------------
     # objective: hit the area program as closely as possible, plus opt-in
