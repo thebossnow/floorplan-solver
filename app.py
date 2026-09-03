@@ -83,6 +83,14 @@ PRESETS = [
 
 app = Flask(__name__)
 
+# Phase 7: machine-facing JSON API, kept as a separate Blueprint (sign-off
+# #7) rather than merged into this file's own human-form routes -- see
+# api_routes.py's own docstring. Registered here, not import-time
+# side-effected in api_routes.py itself, so app.py stays the one place
+# that assembles the actual Flask app.
+from api_routes import api as api_blueprint  # noqa: E402 (after app = Flask(...) on purpose)
+app.register_blueprint(api_blueprint)
+
 
 def _room_rows(plan):
     # plan's area/target are grid-units^2 (1 grid-unit = 6in, so 1 sf = 4

@@ -7,9 +7,14 @@ place_openings()/to_svg()/circulation_ok(), which render_svg() below and
 validators.validate() handle separately -- see V2-ALPHA-PLAN.md's
 "solve_program() / validate() / render_svg()" section.
 
-Phase 2 scope only: this wraps solve()/solve_zoned() exactly as they work
-today (v1 rule content unchanged) -- no assumption-literal diagnosis, no
-ruleset, no new hard rules. Those are Phase 3/4.
+Phase 7 update: solve_program() now exposes ruleset/diagnose_infeasibility/
+time_limit, needed for POST /api/solve (Phase 2-6 only wired these into
+layout.solve() itself, not this wrapper). ruleset/diagnose_infeasibility
+stay unzoned-only, matching layout.solve()'s own documented scope --
+zoning.solve_zoned() doesn't accept either, and threading a ruleset
+through its own per-zone solve() calls (technically possible via its
+`weights` dict, since that's just **kwargs) is a separate, not-yet-
+scoped extension, not silently bolted on here.
 """
 
 import time
@@ -19,7 +24,8 @@ from typing import Dict, List, Optional, Tuple
 from generator import (HALLWAYS, PRODUCTION_WEIGHTS, STYLES, ZONE_ROOM_THRESHOLD,
                         default_proximity, generate_program, shelf_pack_hint,
                         zone_of_program)
-from layout import Adj, Footprint, Room, place_openings, solve, to_svg
+from layout import Adj, Footprint, InfeasibilityDiagnosis, Room, place_openings, room_kind, solve, to_svg
+from rules import Ruleset
 from zoning import solve_zoned
 
 # Independent copies of app.py's own tuning constants, not an import from
@@ -40,13 +46,16 @@ class ProgramSpec:
     the orchestrate-layer counterpart to generate_program()'s own
     positional args. width replaces shape as the primary footprint
     control (matching v1's width slider); has_entry=False drops the
-    separate Entry room (2026-09-02 plan review)."""
+    separate Entry room (2026-09-02 plan review). ruleset is a real
+    rules.Ruleset object here (not a JSON-shaped id string) -- api_routes.py
+    resolves an incoming ruleset id to one before constructing a spec."""
     total_area: int
     beds: int = 3
     baths: int = 2
     style: str = "traditional"
     width: Optional[int] = None
     has_entry: bool = True
+    ruleset: Optional[Ruleset] = None
 
 
 @dataclass
@@ -68,6 +77,7 @@ class SolveResult:
     best_objective_bound: Optional[float] = None
     cross: Optional[Dict] = None
     zone_metrics: Optional[Dict] = None
+    diagnosis: Optional[InfeasibilityDiagnosis] = None
 
 
 def _entry_room_name(rooms: List[Room]) -> str:
@@ -83,11 +93,35 @@ def _entry_room_name(rooms: List[Room]) -> str:
     return "Great" if "Great" in names else "Living"
 
 
-def solve_program(spec: ProgramSpec, seed: int = 0, workers: int = 8) -> SolveResult:
+def _private_room_names(rooms: List[Room]) -> Tuple[str, ...]:
+    """Rooms circulation_ok() should treat as private (closets, ensuite
+    baths -- never a hallway pass-through), inferred from room_kind() the
+    same way generate_program() builds its own `private` tuple. Needed
+    for POST /api/validate (Phase 7), whose request shape has no explicit
+    `private` field -- see V2-ALPHA-PLAN.md's API surface."""
+    return tuple(r.name for r in rooms
+                 if room_kind(r.name) == "closet" or
+                 (room_kind(r.name) == "wet" and r.name != "Utility"))
+
+
+def solve_program(spec: ProgramSpec, seed: int = 0, workers: int = 8,
+                   diagnose_infeasibility: bool = False,
+                   time_limit: Optional[float] = None) -> SolveResult:
     """Runs ProgramSpec -> generate_program() -> solve()/solve_zoned(),
     no rendering. Raises ValueError for an invalid spec (unknown style,
     out-of-range area/beds/baths -- same validation generate_program()/
-    layout.validate_program() already do)."""
+    layout.validate_program() already do).
+
+    time_limit overrides this module's own TIME_LIMIT/SOLVE_TIME_BUDGET
+    when given (SOLVE_TIME_BUDGET on the zoned path is a *total* budget
+    across every zone, not a per-attempt cap like TIME_LIMIT -- a
+    different semantic than the unzoned path, but both are "the module's
+    own timing constant," so one override param covers both).
+
+    diagnose_infeasibility/spec.ruleset only apply on the unzoned path --
+    see this module's own docstring for why zoning doesn't support
+    either yet. SolveResult.diagnosis is always None on the zoned path or
+    when the unzoned solve doesn't come back INFEASIBLE."""
     fp, rooms, adj, private = generate_program(
         spec.total_area, spec.beds, spec.baths, style=spec.style,
         width=spec.width, has_entry=spec.has_entry)
@@ -99,8 +133,9 @@ def solve_program(spec: ProgramSpec, seed: int = 0, workers: int = 8) -> SolveRe
     if zoned:
         zone_of = zone_of_program(rooms)
         plan, status, cross, zone_metrics = solve_zoned(
-            fp, rooms, adj, zone_of, time_budget=SOLVE_TIME_BUDGET, seed=seed,
-            workers=workers, hallways=HALLWAYS, private=private,
+            fp, rooms, adj, zone_of,
+            time_budget=time_limit if time_limit is not None else SOLVE_TIME_BUDGET,
+            seed=seed, workers=workers, hallways=HALLWAYS, private=private,
             weights=PRODUCTION_WEIGHTS, proximity=proximity)
         wall_time = time.time() - t0
         return SolveResult(plan=plan, status=status, footprint=fp, rooms=rooms,
@@ -109,14 +144,18 @@ def solve_program(spec: ProgramSpec, seed: int = 0, workers: int = 8) -> SolveRe
                             zone_metrics=zone_metrics)
 
     hint = shelf_pack_hint(fp, rooms)
+    diagnosis_out = []
     plan, status, objective_value, best_objective_bound, wall_time = solve(
-        fp, rooms, adj, time_limit=TIME_LIMIT, seed=seed, workers=workers, hint=hint,
-        hallways=HALLWAYS, private=private, no_improvement_timeout=NO_IMPROVEMENT_TIMEOUT,
-        proximity=proximity, **PRODUCTION_WEIGHTS)
+        fp, rooms, adj, time_limit=time_limit if time_limit is not None else TIME_LIMIT,
+        seed=seed, workers=workers, hint=hint, hallways=HALLWAYS, private=private,
+        no_improvement_timeout=NO_IMPROVEMENT_TIMEOUT, proximity=proximity,
+        ruleset=spec.ruleset, diagnose_infeasibility=diagnose_infeasibility,
+        diagnosis_out=diagnosis_out, **PRODUCTION_WEIGHTS)
     return SolveResult(plan=plan, status=status, footprint=fp, rooms=rooms,
                         adjacencies=adj, private=private, entry_room=entry_room,
                         zoned=False, wall_time=wall_time, objective_value=objective_value,
-                        best_objective_bound=best_objective_bound)
+                        best_objective_bound=best_objective_bound,
+                        diagnosis=diagnosis_out[0] if diagnosis_out else None)
 
 
 def render_svg(result: SolveResult, title_block: Optional[dict] = None) -> str:
