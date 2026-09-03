@@ -106,6 +106,19 @@ class Proximity:
 
 
 @dataclass
+class AdjPref:
+    """A soft adjacency preference (parallel to Proximity, same (a, b)
+    shape -- global weight only via solve()'s adjacency_weight, not a
+    per-pair weight, for parity with Proximity/proximity_weight, per
+    V2-ALPHA-PLAN.md's sign-off #6). Stronger than Proximity: Proximity
+    rewards the two rooms' centroids being close; AdjPref specifically
+    rewards their walls actually coinciding (i.e. touching), without
+    making it a hard requirement the way Adj does."""
+    a: str
+    b: str
+
+
+@dataclass
 class Footprint:
     width: int
     height: int
@@ -364,6 +377,8 @@ def solve(footprint: Footprint,
           no_improvement_timeout: Optional[float] = None,
           proximity: Optional[List[Proximity]] = None,
           proximity_weight: int = 0,
+          adjacency_preferences: Optional[List["AdjPref"]] = None,
+          adjacency_weight: int = 0,
           diagnose_infeasibility: bool = False,
           diagnosis_out: Optional[List["InfeasibilityDiagnosis"]] = None,
           ruleset: Optional["rules.Ruleset"] = None):
@@ -463,7 +478,19 @@ def solve(footprint: Footprint,
     constraints instead (no literal, no assumption, zero diagnosis
     overhead -- same "opt-in per axis" split as diagnose_infeasibility
     itself: passing a ruleset doesn't force you to also pay for
-    diagnosis, and vice versa)."""
+    diagnosis, and vice versa).
+
+    adjacency_preferences/adjacency_weight: opt-in soft objective term
+    (default: no AdjPref pairs, weight 0 -- a no-op, today's behavior).
+    Reuses _guideline_usage() (the same covering-objective reformulation
+    alignment_weight already uses), applied per preferred pair instead of
+    globally: for each AdjPref(a, b), minimizes the number of distinct x/y
+    coordinate lines used by a's and b's combined edges, which is
+    minimized exactly when their walls coincide, i.e. when they touch.
+    Stronger than Proximity (which only rewards centroid closeness) but
+    still soft, not a hard requirement the way Adj is. Additive alongside
+    Proximity/proximity_weight, not a replacement -- both can be active
+    at once."""
 
     validate_program(footprint, rooms, adjacencies, hallways, private, proximity)
     lit_index_to_rule: Dict[int, str] = {}
@@ -837,6 +864,23 @@ def solve(footprint: Footprint,
             m.add_abs_equality(ady, dy)
             prox_terms.append(adx + ady)
         objective += proximity_weight * sum(prox_terms)
+
+    # soft adjacency preference: for each named pair, minimize the number
+    # of distinct x/y coordinate lines their combined edges use -- reuses
+    # _guideline_usage() (see alignment_weight above), scoped to just this
+    # pair's own parts instead of every room in the plan. Additive
+    # alongside proximity above, not a replacement -- Proximity rewards
+    # centroid closeness broadly; this specifically rewards actual wall-
+    # on-wall alignment (touching) for named pairs, without making it a
+    # hard requirement the way Adj is.
+    if adjacency_preferences and adjacency_weight > 0:
+        for i, pr in enumerate(adjacency_preferences):
+            pair_pks = part_keys[pr.a] + part_keys[pr.b]
+            x_edges = [(pk, x1[pk]) for pk in pair_pks] + [(pk, x2[pk]) for pk in pair_pks]
+            y_edges = [(pk, y1[pk]) for pk in pair_pks] + [(pk, y2[pk]) for pk in pair_pks]
+            used_x = _guideline_usage(m, W, x_edges, f"adjpref_x_{i}")
+            used_y = _guideline_usage(m, H, y_edges, f"adjpref_y_{i}")
+            objective += adjacency_weight * (sum(used_x) + sum(used_y))
 
     m.minimize(objective)
 
