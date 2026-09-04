@@ -86,11 +86,24 @@ def _entry_room_name(rooms: List[Room]) -> str:
     ProgramSpec.has_entry=False (see generate_program()'s docstring).
     Derived from the room list itself rather than duplicating style-name
     logic here, so this stays correct if a future style's own arrival
-    room isn't Living/Great."""
+    room isn't Living/Great.
+
+    Raises ValueError if none of Entry/Great/Living appear at all --
+    always safe for solve_program()'s own generate_program()-produced
+    rooms (one of the three is always present), but POST /api/validate
+    accepts an arbitrary caller-submitted room list, where silently
+    guessing "Living" (when it isn't even in the list) would produce a
+    bogus circulation_ok=False instead of a clear error."""
     names = {r.name for r in rooms}
     if "Entry" in names:
         return "Entry"
-    return "Great" if "Great" in names else "Living"
+    if "Great" in names:
+        return "Great"
+    if "Living" in names:
+        return "Living"
+    raise ValueError(
+        "cannot determine the entry room: none of 'Entry', 'Great', or 'Living' "
+        "appear in the submitted rooms")
 
 
 def _private_room_names(rooms: List[Room]) -> Tuple[str, ...]:
@@ -121,13 +134,29 @@ def solve_program(spec: ProgramSpec, seed: int = 0, workers: int = 8,
     diagnose_infeasibility/spec.ruleset only apply on the unzoned path --
     see this module's own docstring for why zoning doesn't support
     either yet. SolveResult.diagnosis is always None on the zoned path or
-    when the unzoned solve doesn't come back INFEASIBLE."""
+    when the unzoned solve doesn't come back INFEASIBLE.
+
+    Raises ValueError up front if the program needs zoning (>
+    ZONE_ROOM_THRESHOLD rooms -- routinely true for beds=5/baths=4, well
+    within ProgramSpec's own valid range) while either is requested,
+    rather than silently solving without them: a caller who explicitly
+    asked for ruleset enforcement getting back {ok:true, ...} with the
+    ruleset quietly never applied is a worse failure mode than a clear
+    rejection."""
     fp, rooms, adj, private = generate_program(
         spec.total_area, spec.beds, spec.baths, style=spec.style,
         width=spec.width, has_entry=spec.has_entry)
     entry_room = _entry_room_name(rooms)
     proximity = default_proximity(rooms)
     zoned = len(rooms) > ZONE_ROOM_THRESHOLD
+
+    if zoned and (spec.ruleset is not None or diagnose_infeasibility):
+        raise ValueError(
+            f"this program needs {len(rooms)} rooms, over the {ZONE_ROOM_THRESHOLD}-room "
+            "threshold that requires zoning -- ruleset enforcement and infeasibility "
+            "diagnosis aren't supported on the zoned path yet, so this request can't "
+            "honor what was asked for. Retry with fewer beds/baths, or without "
+            "ruleset/diagnose_infeasibility.")
 
     t0 = time.time()
     if zoned:

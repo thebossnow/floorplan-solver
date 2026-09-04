@@ -18,6 +18,15 @@ from validators import validate as validate_result
 
 api = Blueprint("api", __name__, url_prefix="/api")
 
+# Upper bound on a caller-supplied time_limit -- unlike total_area/beds/
+# baths, nothing about solve_program()'s own signature caps this, so an
+# unvalidated request could tie up a CP-SAT worker (of 8) for as long as
+# the caller likes. 120s is double app.py's own production TIME_LIMIT
+# (25s) and matches SOLVE_TIME_BUDGET's own doubling-for-Vercel headroom
+# elsewhere in this codebase -- generous for a deliberately slow ruleset
+# solve, not unlimited.
+MAX_TIME_LIMIT = 120.0
+
 
 def _resolve_ruleset(ruleset_id):
     """None (the field omitted or explicitly null) -> no ruleset, today's
@@ -48,6 +57,8 @@ def solve_route():
         time_limit = body.get("time_limit")
         time_limit = float(time_limit) if time_limit is not None else None
 
+        if time_limit is not None and not (0 < time_limit <= MAX_TIME_LIMIT):
+            raise ValueError(f"time_limit must be between 0 and {MAX_TIME_LIMIT}")
         if not (MIN_AREA <= total_area <= MAX_AREA):
             raise ValueError(f"total_area must be between {MIN_AREA} and {MAX_AREA}")
         if not (1 <= beds <= MAX_BEDS):
@@ -92,7 +103,14 @@ def validate_route():
         if not isinstance(plan, dict):
             raise ValueError("plan must be an object keyed by room name")
         footprint, rooms, adjacencies, private = program_from_dict(body)
-        if not private:
+        # "private" absent from the request at all -> infer it from
+        # room_kind(). An explicit "private": [] is a deliberate caller
+        # choice (e.g. "treat every room as public for this check") and
+        # must NOT be overridden -- checked against the raw body, not the
+        # already-tupled `private` above, since program_from_dict() (by
+        # design) can't distinguish an empty list from an omitted key by
+        # the time it returns.
+        if "private" not in body:
             private = _private_room_names(rooms)
         # ruleset is accepted (matching the documented request shape) but
         # not yet consumed -- none of Phase 5's four validators are
@@ -101,18 +119,27 @@ def validate_route():
         # and validated here so a bad/unknown id fails loudly now rather
         # than silently doing nothing forever.
         _resolve_ruleset(body.get("ruleset"))
+        # Raises if none of Entry/Great/Living (generate_program()'s own
+        # arrival-room names) appear in a caller-submitted room list --
+        # /api/solve's own programs always have one, but /api/validate
+        # accepts an arbitrary program, where silently guessing "Living"
+        # would produce a bogus circulation_ok=False instead of a clear
+        # error (see this function's own docstring).
+        entry_room = _entry_room_name(rooms)
     except (KeyError, TypeError, ValueError) as e:
         return jsonify(ok=False, error=str(e)), 400
 
     result = SolveResult(plan=plan, status="OK", footprint=footprint, rooms=rooms,
                           adjacencies=adjacencies, private=private,
-                          entry_room=_entry_room_name(rooms), zoned=False)
+                          entry_room=entry_room, zoned=False)
     try:
         v = validate_result(result)
-    except (KeyError, ValueError) as e:
+    except (KeyError, TypeError, ValueError) as e:
         # a plan/rooms mismatch (e.g. a room in `rooms` missing from
-        # `plan`) surfaces from deep inside circulation_ok()/place_openings()
-        # as a bare KeyError -- normalize to the same {ok:false, error} shape
+        # `plan`, or a part's coordinates sent as strings instead of
+        # ints) surfaces from deep inside circulation_ok()/
+        # place_openings() as a bare KeyError/TypeError -- normalize to
+        # the same {ok:false, error} shape rather than a bare 500.
         return jsonify(ok=False, error=f"plan/program mismatch: {e}"), 400
     return jsonify(ok=True, **v)
 

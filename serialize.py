@@ -60,13 +60,15 @@ def program_to_dict(footprint: Footprint, rooms: List[Room], adjacencies: List[A
 
 def program_from_dict(d: Dict[str, Any]):
     """Returns (footprint, rooms, adjacencies, private). `private`, if
-    the caller's JSON doesn't include it (POST /api/validate's own
-    request shape doesn't -- see orchestrate._private_room_names()),
-    comes back as an empty tuple rather than raising, since a caller
-    that only has rooms/adjacencies (not a full echoed `program`) has no
-    other way to supply it."""
+    the caller's JSON omits it (POST /api/validate's own request shape
+    doesn't require it -- see orchestrate._private_room_names()) OR
+    sends it as an explicit JSON null, comes back as an empty tuple
+    rather than raising (a bare `d.get("private", ())` only handles the
+    omitted case -- tuple(None) raises TypeError -- since many JSON
+    client libraries naturally emit null for "nothing here" rather than
+    omitting the key)."""
     footprint = footprint_from_dict(d["footprint"])
     rooms = [room_from_dict(r) for r in d["rooms"]]
     adjacencies = [adj_from_dict(a) for a in d["adjacencies"]]
-    private = tuple(d.get("private", ()))
+    private = tuple(d.get("private") or ())
     return footprint, rooms, adjacencies, private
