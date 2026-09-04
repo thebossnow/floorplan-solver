@@ -83,15 +83,32 @@ PRESETS = [
 
 app = Flask(__name__)
 
+# Phase 7: machine-facing JSON API, kept as a separate Blueprint (sign-off
+# #7) rather than merged into this file's own human-form routes -- see
+# api_routes.py's own docstring. Registered here, not import-time
+# side-effected in api_routes.py itself, so app.py stays the one place
+# that assembles the actual Flask app.
+from api_routes import api as api_blueprint  # noqa: E402 (after app = Flask(...) on purpose)
+app.register_blueprint(api_blueprint)
+
 
 def _room_rows(plan):
+    # plan's area/target are grid-units^2 (1 grid-unit = 6in, so 1 sf = 4
+    # grid-units^2) -- convert to real sf here, once, so templates keep
+    # displaying whatever they're handed unchanged. area/target rounded
+    # independently, then delta taken from THOSE rounded values (not
+    # computed separately and rounded on its own), so the displayed
+    # numbers are always self-consistent (area - target == delta exactly,
+    # not off by a rounding unit).
     rows = []
     for name, r in plan.items():
         kind = room_kind(name)
         swatch = FILL_BY_KIND["sleep"] if kind == "closet" else FILL_BY_KIND[kind]
+        area_sf = round(r["area"] / 4)
+        target_sf = round(r["target"] / 4)
         rows.append(dict(
             name=display_name(name), raw_name=name, group=GROUP_BY_KIND[kind], swatch=swatch,
-            area=r["area"], target=r["target"], delta=r["area"] - r["target"],
+            area=area_sf, target=target_sf, delta=area_sf - target_sf,
         ))
     order = {g: i for i, g in enumerate(GROUP_ORDER)}
     rows.sort(key=lambda row: (order[row["group"]], row["name"]))
@@ -137,8 +154,11 @@ def _run_solve(source, attempt):
             fp, rooms, adj, private = generate_program(
                 form["area"], form["beds"], form["baths"], form["shape"], form["style"],
                 width=form["width"])
-            form["width"] = fp.width  # reflect the resolved/clamped value (also
-                                       # what the copy-link querystring encodes)
+            # reflect the resolved/clamped value (also what the copy-link
+            # querystring encodes) -- fp.width is grid-units, form["width"]
+            # is public-facing feet, same boundary as generate_program()'s
+            # own width param
+            form["width"] = round(fp.width / 2)
             proximity = default_proximity(rooms)
 
             zoned = len(rooms) > ZONE_ROOM_THRESHOLD
@@ -176,10 +196,12 @@ def _run_solve(source, attempt):
                          "Try a larger area, fewer bedrooms/bathrooms, or a different shape.")
             else:
                 openings = place_openings(plan, fp, adj, rooms)
+                # fp.width/height/area are grid-units (1 grid-unit = 6in) --
+                # /2 for linear feet, /4 for sf, everywhere below this point
                 title_block = dict(
                     title="FLOOR PLAN",
                     lines=[
-                        f'{fp.area():,} SF',
+                        f'{fp.area()/4:,.0f} SF',
                         f'{form["beds"]} BED / {form["baths"]} BATH',
                         form["style"].replace("_", " ").upper(),
                         date.today().strftime("%b %d %Y").upper(),
@@ -201,7 +223,7 @@ def _run_solve(source, attempt):
                     is_optimal = status == "OPTIMAL"
                 result = dict(
                     svg=svg_markup,
-                    headline=(f'{fp.width} × {fp.height} ft · {fp.area():,} sf · '
+                    headline=(f'{fp.width/2:g} × {fp.height/2:g} ft · {fp.area()/4:,.0f} sf · '
                                f'{form["beds"]} bed / {form["baths"]} bath'),
                     status=status,
                     is_optimal=is_optimal,
@@ -211,8 +233,8 @@ def _run_solve(source, attempt):
                     objective_value=objective_value,
                     best_objective_bound=best_objective_bound,
                     zone_metrics=zone_metrics,
-                    footprint=f'{fp.width} x {fp.height} ft ({fp.area()} sf)',
-                    total=sum(r["area"] for r in plan.values()),
+                    footprint=f'{fp.width/2:g} x {fp.height/2:g} ft ({fp.area()/4:,.0f} sf)',
+                    total=round(sum(r["area"] for r in plan.values()) / 4),
                     circulation_ok=ok,
                     unreachable=unreachable,
                     rooms=_room_rows(plan),

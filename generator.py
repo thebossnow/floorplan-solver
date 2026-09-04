@@ -17,34 +17,38 @@ MAX_AREA = 10000
 MAX_BEDS = 5
 MAX_BATHS = 4
 
-# static per-room shape constraints, independent of style or program size
+# static per-room shape constraints, independent of style or program size.
+# min_dim is in grid-units (6in each -- see V2-ALPHA-PLAN.md's units
+# migration); comments give the real-feet equivalent.
 ROOM_SPECS = {
-    "Entry":    dict(min_dim=5,  max_aspect=2.5, edges=["S"]),
-    "Living":   dict(min_dim=10, max_aspect=1.9),
-    "Kitchen":  dict(min_dim=8,  max_aspect=2.0),
-    "Dining":   dict(min_dim=8,  max_aspect=1.8),
-    "Great":    dict(min_dim=14, max_aspect=2.2),
-    "Hall":     dict(min_dim=3,  max_aspect=8.0, needs_exterior=False),
-    "Utility":  dict(min_dim=5,  max_aspect=2.5),
-    "Primary":  dict(min_dim=11, max_aspect=1.7),
-    "PrimBath": dict(min_dim=5,  max_aspect=2.5),
+    "Entry":    dict(min_dim=10, max_aspect=2.5, edges=["S"]),  # 5ft
+    "Living":   dict(min_dim=20, max_aspect=1.9),                # 10ft
+    "Kitchen":  dict(min_dim=16, max_aspect=2.0),                 # 8ft
+    "Dining":   dict(min_dim=16, max_aspect=1.8),                 # 8ft
+    "Great":    dict(min_dim=28, max_aspect=2.2),                 # 14ft
+    "Hall":     dict(min_dim=6,  max_aspect=8.0, needs_exterior=False),  # 3ft
+    "Utility":  dict(min_dim=10, max_aspect=2.5),                 # 5ft
+    "Primary":  dict(min_dim=22, max_aspect=1.7),                 # 11ft
+    "PrimBath": dict(min_dim=10, max_aspect=2.5),                 # 5ft
 }
 
 # each style is just a different public-room mix (pcts/floors/adjacency);
-# the bedroom/bathroom wing below is shared across all styles
+# the bedroom/bathroom wing below is shared across all styles.
+# floors are in grid-units^2 (1 grid-unit = 6in, so 1 sf = 4 grid-units^2);
+# comments give the real-sf equivalent.
 STYLES = {
     "traditional": dict(
         pcts={"Entry": 0.040, "Living": 0.205, "Kitchen": 0.133, "Dining": 0.100,
               "Hall": 0.050, "Utility": 0.050},
-        floors={"Entry": 30, "Living": 140, "Kitchen": 90, "Dining": 70,
-                "Hall": 30, "Utility": 30},
+        floors={"Entry": 120, "Living": 560, "Kitchen": 360, "Dining": 280,
+                "Hall": 120, "Utility": 120},  # 30,140,90,70,30,30 sf
         adj=[("Entry", "Living"), ("Living", "Dining"), ("Dining", "Kitchen"),
              ("Living", "Hall"), ("Kitchen", "Utility")],
     ),
     "open_concept": dict(
         # Living+Kitchen+Dining collapsed into one big "Great" room
         pcts={"Entry": 0.035, "Great": 0.360, "Hall": 0.045, "Utility": 0.045},
-        floors={"Entry": 30, "Great": 260, "Hall": 30, "Utility": 30},
+        floors={"Entry": 120, "Great": 1040, "Hall": 120, "Utility": 120},  # 30,260,30,30 sf
         adj=[("Entry", "Great"), ("Great", "Hall"), ("Great", "Utility")],
     ),
 }
@@ -53,11 +57,24 @@ PRIMARY_PCT = 0.167
 PRIMARY_BATH_PCT = 0.060
 BED_PCT = 0.117       # each secondary bedroom
 BATH_PCT = 0.042      # each secondary bathroom
-CLOSET_AREA = 20      # sf, carved out of each bedroom's own target
 
-PRIMARY_FLOOR = 110
-BED_FLOOR = 75
-BATH_FLOOR = 35
+# Each bedroom's closet is a percentage of that SAME bedroom's own target
+# area, carved out before the closet is subtracted -- not a flat constant
+# (that was the original design, CLOSET_AREA=80 regardless of bedroom
+# size) -- changed 2026-09-02 after Phase 7 integration testing found a
+# flat closet size geometrically incompatible with layout.solve()'s
+# closet_align_width rule for any real bedroom (a fixed 20sf closet can
+# never reach even 30% of an 11ft-min_dim Primary bedroom's width). Per
+# 2026-09-02 user review: "the closet theoretically is a part of the
+# bedroom, not an afterthought" -- CLOSET_PCT makes a bigger bedroom get
+# a bigger closet, same as every other proportional room share here.
+CLOSET_PCT = 0.15
+CLOSET_MIN_AREA = 60  # grid-units^2 floor, so a small secondary bedroom's
+                      # closet doesn't shrink toward nothing
+
+PRIMARY_FLOOR = 440   # 110 sf
+BED_FLOOR = 300       # 75 sf
+BATH_FLOOR = 140      # 35 sf
 
 
 def _fit_targets(pcts: Dict[str, float], floors: Dict[str, int], F: int) -> Dict[str, int]:
@@ -128,6 +145,17 @@ def shelf_pack_hint(footprint: Footprint, rooms: List[Room]) -> Dict[str, Tuple[
 WIDTH_ASPECT_MAX = 2.5   # long side : short side
 WIDTH_MIN_SIDE = 20      # ft -- comfortably above the widest room min_dim
                          # (Great, 14ft) plus margin for halls/walls
+                         #
+                         # Stays in FEET, deliberately not grid-units, despite
+                         # V2-ALPHA-PLAN.md's units-migration table listing this
+                         # as ft->grid-units (20->40): width_bounds() is a public
+                         # boundary function, same category as MIN_AREA/MAX_AREA
+                         # (which that same table marks unchanged) -- it's called
+                         # directly by templates/index.html's JS to size the HTML
+                         # slider, and by make_footprint() to clamp the public
+                         # `width` param, both still in feet. Converting it would
+                         # silently break the live v1 form (still feet-only) on
+                         # this branch. See make_footprint()'s docstring.
 
 
 def width_bounds(total_area: int) -> Tuple[int, int]:
@@ -147,25 +175,36 @@ def width_bounds(total_area: int) -> Tuple[int, int]:
 
 def make_footprint(total_area: int, shape: str = "rectangular", aspect: float = 1.4,
                     width: int = None) -> Footprint:
+    """total_area is public-facing square feet; width (when given) is public-
+    facing feet, same boundary treatment -- both convert to grid-units
+    (1 grid-unit = 6in) here, as the very first step, before any Footprint
+    math. width_bounds()/WIDTH_MIN_SIDE/WIDTH_ASPECT_MAX stay in feet too
+    (they're also public boundary -- used directly by the HTML slider),
+    so `width` is clamped in feet, then converted."""
+    area_gu = total_area * 4  # sf -> grid-units^2
     if width is not None:
-        lo, hi = width_bounds(total_area)
-        width = max(lo, min(width, hi))
-        height = max(round(total_area / width), 15)
-        return Footprint(width=width, height=height)
+        lo, hi = width_bounds(total_area)      # feet, public boundary
+        width_ft = max(lo, min(width, hi))
+        width_gu = width_ft * 2
+        height_gu = max(round(area_gu / width_gu), 30)  # 15ft floor -> 30gu
+        return Footprint(width=width_gu, height=height_gu)
     if shape == "square":
-        side = max(round(total_area ** 0.5), 15)
-        return Footprint(width=side, height=side)
-    W = max(round((total_area * aspect) ** 0.5), 15)
-    H = max(round(total_area / W), 15)
-    return Footprint(width=W, height=H)
+        side_gu = max(round(area_gu ** 0.5), 30)
+        return Footprint(width=side_gu, height=side_gu)
+    W_gu = max(round((area_gu * aspect) ** 0.5), 30)
+    H_gu = max(round(area_gu / W_gu), 30)
+    return Footprint(width=W_gu, height=H_gu)
 
 
 def generate_program(total_area: int, beds: int = 3, baths: int = 2,
                       shape: str = "rectangular", style: str = "traditional",
-                      width: int = None):
+                      width: int = None, has_entry: bool = True):
     """Returns (footprint, rooms, adjacencies, private_room_names). `width`
     (ft), when given, overrides `shape`/`aspect` entirely -- see
-    make_footprint()."""
+    make_footprint(). has_entry=False drops the separate Entry room --
+    the style's arrival room (Living for traditional, Great for
+    open_concept) takes over Entry's boundary-edge requirement instead,
+    for a front door that opens directly into it."""
     if style not in STYLES:
         raise ValueError(f"unknown style {style!r}; choose from {sorted(STYLES)}")
     beds = max(1, min(beds, MAX_BEDS))
@@ -175,8 +214,23 @@ def generate_program(total_area: int, beds: int = 3, baths: int = 2,
     fp = make_footprint(total_area, shape, width=width)
     F = fp.area()
 
+    # public_names drives which rooms get built from ROOM_SPECS below --
+    # kept as its own list (not read back off style_cfg["pcts"], which
+    # stays the original, un-mutated style dict) so has_entry=False can
+    # drop "Entry" from it without needing a second, differently-scoped
+    # dict just for the room-construction loop.
+    public_names = list(style_cfg["pcts"])
     pcts = dict(style_cfg["pcts"])
     floors = dict(style_cfg["floors"])
+    style_adj = list(style_cfg["adj"])
+    arrival = None
+    if not has_entry:
+        public_names.remove("Entry")
+        del pcts["Entry"]
+        del floors["Entry"]
+        style_adj = [(a, b) for a, b in style_adj if "Entry" not in (a, b)]
+        arrival = "Great" if "Great" in pcts else "Living"
+
     pcts["Primary"] = PRIMARY_PCT
     floors["Primary"] = PRIMARY_FLOOR
     pcts["PrimBath"] = PRIMARY_BATH_PCT
@@ -193,18 +247,24 @@ def generate_program(total_area: int, beds: int = 3, baths: int = 2,
     bedroom_names = ["Primary"] + [f"Bed{i}" for i in range(2, beds + 1)]
     bathroom_names = ["PrimBath"] + [f"Bath{i}" for i in range(2, baths + 1)]
 
+    closet_areas = {b: max(round(targets[b] * CLOSET_PCT), CLOSET_MIN_AREA) for b in bedroom_names}
     for b in bedroom_names:
-        targets[b] = max(targets[b] - CLOSET_AREA, floors.get(b, BED_FLOOR))
+        targets[b] = max(targets[b] - closet_areas[b], floors.get(b, BED_FLOOR))
 
-    rooms = [Room(name, targets[name], **ROOM_SPECS[name]) for name in style_cfg["pcts"]]
+    rooms = []
+    for name in public_names:
+        specs = dict(ROOM_SPECS[name])
+        if name == arrival:
+            specs["edges"] = ["S"]
+        rooms.append(Room(name, targets[name], **specs))
     rooms.append(Room("Primary", targets["Primary"], **ROOM_SPECS["Primary"]))
     rooms.append(Room("PrimBath", targets["PrimBath"], **ROOM_SPECS["PrimBath"]))
     for i in range(2, beds + 1):
-        rooms.append(Room(f"Bed{i}", targets[f"Bed{i}"], min_dim=9, max_aspect=1.7))
+        rooms.append(Room(f"Bed{i}", targets[f"Bed{i}"], min_dim=18, max_aspect=1.7))  # 9ft
     for i in range(2, baths + 1):
-        rooms.append(Room(f"Bath{i}", targets[f"Bath{i}"], min_dim=5, max_aspect=2.5))
+        rooms.append(Room(f"Bath{i}", targets[f"Bath{i}"], min_dim=10, max_aspect=2.5))  # 5ft
 
-    adj = [Adj(a, b) for a, b in style_cfg["adj"]]
+    adj = [Adj(a, b) for a, b in style_adj]
     adj.append(Adj("Hall", "Primary"))
     adj.append(Adj("Primary", "PrimBath"))
     for i in range(2, beds + 1):
@@ -212,7 +272,7 @@ def generate_program(total_area: int, beds: int = 3, baths: int = 2,
     for i in range(2, baths + 1):
         adj.append(Adj("Hall", f"Bath{i}"))
 
-    rooms, adj = add_closets(rooms, adj, bedroom_names, area=CLOSET_AREA, min_dim=3, max_aspect=3.0)
+    rooms, adj = add_closets(rooms, adj, bedroom_names, area=closet_areas, min_dim=6, max_aspect=3.0)  # 3ft
 
     # only leaf rooms are private (can't be a hallway to somewhere else) --
     # bedrooms must stay non-private so BFS can relay through them to reach

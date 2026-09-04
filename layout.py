@@ -10,7 +10,11 @@ the common L-shape case), each part sized/placed independently by the
 solver subject to a mandatory shared-wall constraint between
 consecutive parts.
 
-Units are integer feet on a 1ft grid. Change GRID to use 6in units.
+Units are integer grid-units on a 6in grid (1 grid-unit = 6in; linear
+dimensions are real-feet x2, areas real-sf x4) -- unit-agnostic internally,
+same math regardless of grid size. Public callers (generator.py's
+total_area/width params) still take real square feet/feet and convert at
+that boundary; nothing in this module itself assumes a particular scale.
 """
 
 import re
@@ -68,10 +72,10 @@ def display_name(name: str) -> str:
 @dataclass
 class Room:
     name: str
-    target_area: int              # sq ft
+    target_area: int              # grid-units^2 (1 grid-unit = 6in)
     min_area: Optional[int] = None
     max_area: Optional[int] = None
-    min_dim: int = 8              # shortest allowed wall (per part)
+    min_dim: int = 16             # shortest allowed wall (per part), grid-units (8ft)
     max_aspect: float = 2.0       # long side / short side (per part)
     needs_exterior: bool = True   # needs a window
     edges: List[str] = field(default_factory=list)  # forced: N/S/E/W, applies to part 0
@@ -92,11 +96,24 @@ class Room:
 class Adj:
     a: str
     b: str
-    min_shared: int = 3           # ft of shared wall, enough for a door
+    min_shared: int = 6           # grid-units of shared wall (3ft), enough for a door
 
 
 @dataclass
 class Proximity:
+    a: str
+    b: str
+
+
+@dataclass
+class AdjPref:
+    """A soft adjacency preference (parallel to Proximity, same (a, b)
+    shape -- global weight only via solve()'s adjacency_weight, not a
+    per-pair weight, for parity with Proximity/proximity_weight, per
+    V2-ALPHA-PLAN.md's sign-off #6). Stronger than Proximity: Proximity
+    rewards the two rooms' centroids being close; AdjPref specifically
+    rewards their walls actually coinciding (i.e. touching), without
+    making it a hard requirement the way Adj does."""
     a: str
     b: str
 
@@ -114,22 +131,44 @@ class Footprint:
         return a
 
 
+@dataclass
+class InfeasibilityDiagnosis:
+    """Which hard-rule literals were part of a sufficient assumption core
+    when solve(diagnose_infeasibility=True) proves INFEASIBLE -- see
+    solve()'s own docstring. conflicting_rules is a sorted list of rule
+    ids ("{kind}:{entity}", e.g. "adjacency:Hall:Bed2"); message is a
+    ready-to-display sentence.
+
+    Defined HERE, not in rules.py, despite V2-ALPHA-PLAN.md's Architecture
+    section listing it under rules.py: layout.py must construct instances
+    of it directly inside solve(), and stays import-free from every other
+    project module (see this file's own module docstring -- generator.py/
+    zoning.py import *from* layout.py, never the reverse; a rules.py
+    import here would break that). rules.py (Phase 4) re-exports this via
+    `from layout import InfeasibilityDiagnosis` instead of redefining it,
+    so `from rules import InfeasibilityDiagnosis` still works for callers
+    that only know about rules.py."""
+    conflicting_rules: List[str]
+    message: str
+
+
 def _min_dim_floor(name: str) -> Optional[int]:
     """Type-based minimum-dimension floor for validate_program()'s guardrail:
-    bedrooms >= 4ft, closets >= 2ft, bathrooms >= 5ft, independent of whatever
-    min_dim a caller happens to pass. Matched by the same name conventions as
-    room_kind(), except bathrooms here exclude Utility (room_kind lumps it
-    into "wet" for rendering, but it isn't a bathroom)."""
+    bedrooms >= 4ft, closets >= 2ft, bathrooms >= 5ft (8/4/10 grid-units),
+    independent of whatever min_dim a caller happens to pass. Matched by the
+    same name conventions as room_kind(), except bathrooms here exclude
+    Utility (room_kind lumps it into "wet" for rendering, but it isn't a
+    bathroom)."""
     if name.endswith("Closet"):
-        return 2
-    if name == "Primary" or name.startswith("Bed"):
         return 4
+    if name == "Primary" or name.startswith("Bed"):
+        return 8
     if name == "PrimBath" or name.startswith("Bath"):
-        return 5
+        return 10
     return None
 
 
-def add_closets(rooms, adjacencies, bedrooms, area=20, min_dim=3, max_aspect=3.0, min_shared=2):
+def add_closets(rooms, adjacencies, bedrooms, area=80, min_dim=6, max_aspect=3.0, min_shared=4):
     """Attach a mandatory closet to each named bedroom.
 
     A closet is just a small interior room plus a forced Adj to its
@@ -139,6 +178,13 @@ def add_closets(rooms, adjacencies, bedrooms, area=20, min_dim=3, max_aspect=3.0
     meant to share the same reserved footprint; this helper doesn't
     touch the bedroom's target.
 
+    area: a single grid-units^2 value applied to every closet (the
+    original behavior), or a {bedroom_name: area} dict for per-bedroom
+    sizing -- generate_program() uses the latter so each closet is
+    proportional to its OWN bedroom (added 2026-09-02, alongside
+    layout.solve()'s closet_align_width rule -- see that rule's own
+    docstring for why a flat closet size doesn't work with it).
+
     Returns new (rooms, adjacencies) lists. Closet names are
     f"{bedroom}Closet"; include them in circulation_ok's `private` set
     so they're never treated as a hallway pass-through.
@@ -147,7 +193,8 @@ def add_closets(rooms, adjacencies, bedrooms, area=20, min_dim=3, max_aspect=3.0
     adjacencies = list(adjacencies)
     for b in bedrooms:
         closet = f"{b}Closet"
-        rooms.append(Room(closet, area, min_dim=min_dim, max_aspect=max_aspect,
+        closet_area = area[b] if isinstance(area, dict) else area
+        rooms.append(Room(closet, closet_area, min_dim=min_dim, max_aspect=max_aspect,
                            needs_exterior=False))
         adjacencies.append(Adj(b, closet, min_shared=min_shared))
     return rooms, adjacencies
@@ -190,8 +237,8 @@ def validate_program(footprint: Footprint, rooms: List[Room], adjacencies: List[
         floor = _min_dim_floor(r.name)
         if floor is not None and r.min_dim < floor:
             raise ValueError(
-                f"{r.name}: min_dim={r.min_dim} is below the {floor}ft minimum "
-                f"required for this room type"
+                f"{r.name}: min_dim={r.min_dim} is below the {floor}-grid-unit "
+                f"({floor / 2:g}ft) minimum required for this room type"
             )
         if r.max_aspect < 1:
             raise ValueError(f"{r.name}: max_aspect must be >= 1, got {r.max_aspect}")
@@ -209,9 +256,9 @@ def validate_program(footprint: Footprint, rooms: List[Room], adjacencies: List[
         part_lo = r.min_dim * r.min_dim
         if part_lo > hi:
             raise ValueError(
-                f"{r.name}: min_dim={r.min_dim} forces at least {part_lo} sf per part, "
-                f"but this room's area only ranges up to {hi} sf (target_area={r.target_area}) "
-                "-- raise target_area/max_area or lower min_dim"
+                f"{r.name}: min_dim={r.min_dim} forces at least {part_lo} grid-units^2 "
+                f"per part, but this room's area only ranges up to {hi} grid-units^2 "
+                f"(target_area={r.target_area}) -- raise target_area/max_area or lower min_dim"
             )
 
     for ad in adjacencies:
@@ -227,13 +274,13 @@ def validate_program(footprint: Footprint, rooms: List[Room], adjacencies: List[
     fa = footprint.area()
     if total_lo > fa:
         raise ValueError(
-            f"program needs at least {total_lo} sf across all rooms, "
-            f"but the footprint is only {fa} sf"
+            f"program needs at least {total_lo} grid-units^2 across all rooms, "
+            f"but the footprint is only {fa} grid-units^2"
         )
     if total_hi < fa:
         raise ValueError(
-            f"program's rooms max out at {total_hi} sf combined, "
-            f"but the footprint is {fa} sf -- add rooms or raise max_area/target_area"
+            f"program's rooms max out at {total_hi} grid-units^2 combined, "
+            f"but the footprint is {fa} grid-units^2 -- add rooms or raise max_area/target_area"
         )
 
 
@@ -317,6 +364,13 @@ class _ImprovementTracker(cp_model.CpSolverSolutionCallback):
         self.last_improvement = time.time()
 
 
+# closet_align_width's proportion band (see that rule's own comment,
+# inside solve(), for the full story) -- module-level so it's visible/
+# documented in one place rather than buried inside the function body.
+CLOSET_WIDTH_RATIO_MIN = 30  # percent
+CLOSET_WIDTH_RATIO_MAX = 70  # percent
+
+
 def solve(footprint: Footprint,
           rooms: List[Room],
           adjacencies: List[Adj],
@@ -326,13 +380,23 @@ def solve(footprint: Footprint,
           hint: Optional[Dict[str, Tuple[int, int, int, int]]] = None,
           hallways: Optional[Iterable[str]] = None,
           private: Optional[Iterable[str]] = None,
-          door_width: int = 3,
+          door_width: int = 6,  # grid-units (3ft) -- not in V2-ALPHA-PLAN.md's units
+                                 # table (that only lists place_openings()'s own
+                                 # door_width default); found by reading solve()'s
+                                 # own signature during Phase 1 -- this is the hard-
+                                 # constraint door width, a separate default from
+                                 # place_openings()'s rendering-only one below
           aspect_penalty_weight: int = 0,
           compactness_weight: int = 0,
           alignment_weight: int = 0,
           no_improvement_timeout: Optional[float] = None,
           proximity: Optional[List[Proximity]] = None,
-          proximity_weight: int = 0):
+          proximity_weight: int = 0,
+          adjacency_preferences: Optional[List["AdjPref"]] = None,
+          adjacency_weight: int = 0,
+          diagnose_infeasibility: bool = False,
+          diagnosis_out: Optional[List["InfeasibilityDiagnosis"]] = None,
+          ruleset: Optional["rules.Ruleset"] = None):
     """Returns (plan, status, objective_value, best_objective_bound,
     wall_time). plan is None when status isn't OPTIMAL/FEASIBLE, and
     objective_value/best_objective_bound are None along with it (CP-SAT
@@ -377,9 +441,74 @@ def solve(footprint: Footprint,
     CpSolver.parameters.log_search_progress (see HANDOFF/README) before
     picking a value -- this only helps when the primal itself plateaus
     early; a search that hasn't found *any* incumbent yet has nothing for
-    this to detect."""
+    this to detect.
+
+    diagnose_infeasibility: opt-in, default False = today's exact model
+    (tight w/h/area domains, plain hard constraints, zero extra
+    variables/overhead). When True, four existing per-entity/per-part
+    hard rules -- adjacency, exterior daylight, door access, and min room
+    dimension -- are each wrapped behind their own CP-SAT assumption
+    literal (rule id "{kind}:{entity}", e.g. "adjacency:Hall:Bed2",
+    "min_dim:{part_key}") instead of being unconditional, so that if the
+    solve comes back INFEASIBLE, a second single-worker re-solve against
+    the same model can call sufficient_assumptions_for_infeasibility() to
+    identify which specific rule(s) are in conflict, appended to
+    diagnosis_out (a caller-provided list, same opt-in out-parameter
+    pattern as hint/proximity -- existing callers that don't pass this
+    see zero behavior change) as an InfeasibilityDiagnosis. The returned
+    core is *sufficient*, not *minimal* -- it may name more rules than
+    are strictly necessary to explain the conflict; shrinking it is
+    deferred future work (each shrink attempt costs a full re-solve).
+    Zoned solves (zoning.solve_zoned()) don't support this -- diagnosis
+    is unzoned-only for now, zoning's own anchor/retry logic has a
+    separate failure-attribution story.
+
+    ruleset: opt-in (default None = no ruleset rules at all, today's
+    behavior). A rules.Ruleset instance (not imported here -- see
+    InfeasibilityDiagnosis's own docstring for why layout.py stays
+    import-free) gates three additional hard rules, each a real CP-SAT
+    constraint, not a validator:
+      - hall clear width: every part of every room named in `hallways`
+        must be at least ruleset.hall_clear_width wide/tall -- same shape
+        as min_dim, just a separate (possibly stricter) floor scoped to
+        hallways specifically.
+      - setback envelope: for each (room, edge, distance) in
+        ruleset.setbacks, that room's part-0 boundary on `edge` must sit
+        at least `distance` grid-units in from the footprint's own
+        boundary on that side.
+      - closet alignment: auto-detected from `adjacencies` (any Adj where
+        exactly one side is room_kind()=="closet") rather than a separate
+        parameter -- for each (bedroom, closet) pair found this way, the
+        closet's dimension perpendicular to whichever wall they actually
+        end up sharing must match the bedroom's own (closet_align_width),
+        and the closet must not share the same side of the bedroom as the
+        bedroom's own hallway adjacency, i.e. not on the wall a door would
+        go on (closet_align_position -- no-ops for a bedroom with no
+        hallway adjacency to compare against, rather than erroring).
+    When diagnose_infeasibility is also True, each of these three is
+    wrapped behind its own assumption literal exactly like the four rules
+    above (rule ids "hall_clear_width:{part_key}",
+    "setback:{room}:{edge}", "closet_align_width:{bedroom}",
+    "closet_align_position:{bedroom}"); when False, they're plain hard
+    constraints instead (no literal, no assumption, zero diagnosis
+    overhead -- same "opt-in per axis" split as diagnose_infeasibility
+    itself: passing a ruleset doesn't force you to also pay for
+    diagnosis, and vice versa).
+
+    adjacency_preferences/adjacency_weight: opt-in soft objective term
+    (default: no AdjPref pairs, weight 0 -- a no-op, today's behavior).
+    Reuses _guideline_usage() (the same covering-objective reformulation
+    alignment_weight already uses), applied per preferred pair instead of
+    globally: for each AdjPref(a, b), minimizes the number of distinct x/y
+    coordinate lines used by a's and b's combined edges, which is
+    minimized exactly when their walls coincide, i.e. when they touch.
+    Stronger than Proximity (which only rewards centroid closeness) but
+    still soft, not a hard requirement the way Adj is. Additive alongside
+    Proximity/proximity_weight, not a replacement -- both can be active
+    at once."""
 
     validate_program(footprint, rooms, adjacencies, hallways, private, proximity)
+    lit_index_to_rule: Dict[int, str] = {}
 
     W, H = footprint.width, footprint.height
     m = cp_model.CpModel()
@@ -401,9 +530,24 @@ def solve(footprint: Footprint,
             x2[pk] = m.new_int_var(0, W, f"{pk}_x2")
             y1[pk] = m.new_int_var(0, H, f"{pk}_y1")
             y2[pk] = m.new_int_var(0, H, f"{pk}_y2")
-            w[pk] = m.new_int_var(r.min_dim, W, f"{pk}_w")
-            h[pk] = m.new_int_var(r.min_dim, H, f"{pk}_h")
-            area[pk] = m.new_int_var(part_lo, hi, f"{pk}_a")
+            if diagnose_infeasibility:
+                # widened domains (floor of 1, not min_dim/part_lo) so the
+                # min_dim requirement itself can be relaxed via its own
+                # assumption literal below, instead of being baked into
+                # the variable domain where no literal could ever turn it
+                # off for diagnosis
+                w[pk] = m.new_int_var(1, W, f"{pk}_w")
+                h[pk] = m.new_int_var(1, H, f"{pk}_h")
+                area[pk] = m.new_int_var(1, hi, f"{pk}_a")
+                min_dim_lit = m.new_bool_var(f"rule_min_dim_{pk}")
+                m.add(w[pk] >= r.min_dim).only_enforce_if(min_dim_lit)
+                m.add(h[pk] >= r.min_dim).only_enforce_if(min_dim_lit)
+                m.add_assumption(min_dim_lit)
+                lit_index_to_rule[min_dim_lit.index] = f"min_dim:{pk}"
+            else:
+                w[pk] = m.new_int_var(r.min_dim, W, f"{pk}_w")
+                h[pk] = m.new_int_var(r.min_dim, H, f"{pk}_h")
+                area[pk] = m.new_int_var(part_lo, hi, f"{pk}_a")
 
             xiv[pk] = m.new_interval_var(x1[pk], w[pk], x2[pk], f"{pk}_xi")
             yiv[pk] = m.new_interval_var(y1[pk], h[pk], y2[pk], f"{pk}_yi")
@@ -470,7 +614,13 @@ def solve(footprint: Footprint,
         for pa in part_keys[a]:
             for pb in part_keys[b]:
                 cases += _touch_cases(m, W, H, x1, x2, y1, y2, pa, pb, L, f"adj_{pa}_{pb}")
-        m.add_bool_or(cases)
+        if diagnose_infeasibility:
+            rule_lit = m.new_bool_var(f"rule_adjacency_{a}_{b}")
+            m.add_bool_or(cases).only_enforce_if(rule_lit)
+            m.add_assumption(rule_lit)
+            lit_index_to_rule[rule_lit.index] = f"adjacency:{a}:{b}"
+        else:
+            m.add_bool_or(cases)
 
     # ------------------------------------------------------------------
     # daylight: room must touch the outer boundary (any one part suffices)
@@ -487,7 +637,13 @@ def solve(footprint: Footprint,
                 lit = m.new_bool_var(f"ext_{pk}_{tag}")
                 m.add(var == val).only_enforce_if(lit)
                 lits.append(lit)
-        m.add_bool_or(lits)
+        if diagnose_infeasibility:
+            rule_lit = m.new_bool_var(f"rule_daylight_{r.name}")
+            m.add_bool_or(lits).only_enforce_if(rule_lit)
+            m.add_assumption(rule_lit)
+            lit_index_to_rule[rule_lit.index] = f"daylight:{r.name}"
+        else:
+            m.add_bool_or(lits)
 
     # ------------------------------------------------------------------
     # door access: every non-private, non-hallway room must reach the
@@ -513,7 +669,168 @@ def solve(footprint: Footprint,
                     for hk in part_keys.get(hn, []):
                         lits += _touch_cases(m, W, H, x1, x2, y1, y2, pk, hk,
                                               door_width, f"door_{pk}_{hk}")
-            m.add_bool_or(lits)
+            if diagnose_infeasibility:
+                rule_lit = m.new_bool_var(f"rule_door_access_{r.name}")
+                m.add_bool_or(lits).only_enforce_if(rule_lit)
+                m.add_assumption(rule_lit)
+                lit_index_to_rule[rule_lit.index] = f"door_access:{r.name}"
+            else:
+                m.add_bool_or(lits)
+
+    # ------------------------------------------------------------------
+    # ruleset-gated new hard rules (opt-in via `ruleset` -- see solve()'s
+    # docstring): hall clear width, setback envelope, closet alignment.
+    # ------------------------------------------------------------------
+    if ruleset is not None:
+        # hall clear width: same shape as min_dim's own per-part gating
+        # above, just a separate (possibly stricter) floor scoped to
+        # `hallways` specifically. Doesn't need its own domain widening --
+        # it sits on top of w[pk]/h[pk]'s existing domain (tight or
+        # min_dim-widened, whichever diagnose_infeasibility already chose
+        # above), same as any other extra floor stacked on a variable.
+        for hn in (hallways or ()):
+            for pk in part_keys.get(hn, []):
+                if diagnose_infeasibility:
+                    rule_lit = m.new_bool_var(f"rule_hall_clear_width_{pk}")
+                    m.add(w[pk] >= ruleset.hall_clear_width).only_enforce_if(rule_lit)
+                    m.add(h[pk] >= ruleset.hall_clear_width).only_enforce_if(rule_lit)
+                    m.add_assumption(rule_lit)
+                    lit_index_to_rule[rule_lit.index] = f"hall_clear_width:{pk}"
+                else:
+                    m.add(w[pk] >= ruleset.hall_clear_width)
+                    m.add(h[pk] >= ruleset.hall_clear_width)
+
+        # setback envelope: (room, edge, distance) triples, applied to
+        # part 0 (same scoping as Room.edges/must_cover above) -- a room
+        # not present in this program is silently skipped rather than
+        # erroring, so one ruleset can be reused across programs that
+        # don't all contain every named room.
+        for room_name, edge, distance in ruleset.setbacks:
+            pks = part_keys.get(room_name, [])
+            if not pks:
+                continue
+            pk = pks[0]
+            if edge == "W":
+                con = m.add(x1[pk] >= distance)
+            elif edge == "E":
+                con = m.add(x2[pk] <= W - distance)
+            elif edge == "S":
+                con = m.add(y1[pk] >= distance)
+            elif edge == "N":
+                con = m.add(y2[pk] <= H - distance)
+            else:
+                raise ValueError(f"setback edge must be one of N/S/E/W, got {edge!r}")
+            if diagnose_infeasibility:
+                rule_lit = m.new_bool_var(f"rule_setback_{room_name}_{edge}")
+                con.only_enforce_if(rule_lit)
+                m.add_assumption(rule_lit)
+                lit_index_to_rule[rule_lit.index] = f"setback:{room_name}:{edge}"
+
+        # closet alignment: (bedroom, closet) pairs auto-detected from
+        # `adjacencies` (any Adj where exactly one side is
+        # room_kind()=="closet") rather than a separate parameter -- same
+        # naming convention add_closets()/generate_program() already use.
+        # A fresh, separate _touch_cases() call per pair (min_len=1, just
+        # "which side are they touching on", not enforcing the adjacency
+        # itself -- that's the main adjacency loop's own job above) --
+        # redundant with that loop's own literals, but never
+        # inconsistent with them: a stricter (ad.min_shared) touch is
+        # always also a looser (1) touch on the same side, so wherever
+        # the real adjacency holds, these derived literals agree with it.
+        hallway_set = set(hallways or ())
+        for ad in adjacencies:
+            a_closet, b_closet = room_kind(ad.a) == "closet", room_kind(ad.b) == "closet"
+            if a_closet == b_closet:
+                continue  # neither or both are closets -- not a bedroom/closet pair
+            bedroom, closet = (ad.b, ad.a) if a_closet else (ad.a, ad.b)
+            bed_pks, closet_pks = part_keys.get(bedroom, []), part_keys.get(closet, [])
+            if len(bed_pks) != 1 or len(closet_pks) != 1:
+                continue  # multi-part bedroom/closet: no-op, outside this rule's scope
+            bed_pk, closet_pk = bed_pks[0], closet_pks[0]
+            bc_cases = _touch_cases(m, W, H, x1, x2, y1, y2, bed_pk, closet_pk, 1,
+                                     f"closetalign_{bed_pk}_{closet_pk}")
+            # _touch_cases()'s literals are one-directional (.only_enforce_if
+            # only says "IF true THEN touching", never the converse), so
+            # without this, CP-SAT is free to leave every one of them False
+            # even though bedroom/closet really are touching somewhere
+            # (guaranteed by `ad`'s own mandatory enforcement above) --
+            # forcing at least one True is what makes them actually track
+            # reality. Always added (not gated by ruleset/diagnosis): it's
+            # bookkeeping that follows from `ad` already being mandatory,
+            # not a new rule of its own.
+            m.add_bool_or(bc_cases)
+
+            # width match: the closet's dimension PERPENDICULAR to
+            # whichever wall ends up shared should be a real, proportioned
+            # fraction of the bedroom's own matching dimension -- NOT
+            # exact equality. Originally implemented as == (matching the
+            # plan's literal wording), then changed 2026-09-02 after Phase
+            # 7 integration testing against generate_program()'s REAL
+            # output found it unconditionally INFEASIBLE: real closets
+            # (generator.py's old flat CLOSET_AREA, ~80 grid-units^2,
+            # max_aspect 3.0) top out around 15 grid-units on their
+            # longest side, while real bedrooms need >=18-22 -- zero
+            # overlap, so exact equality could never hold for any actual
+            # house (Phase 4's own tests missed this: they used
+            # artificially generous closet sizes, not generator.py's real
+            # ones). Fixed on both sides: generate_program() now sizes
+            # each closet as a percentage of its OWN bedroom (CLOSET_PCT)
+            # instead of a flat constant, and this rule became a band
+            # instead of equality. CLOSET_WIDTH_RATIO_MIN/MAX (30%-70%) are
+            # a judgment call, not derived from a code minimum -- "usually
+            # matches the width or length" in spirit (proportioned to the
+            # bedroom, not a tiny afterthought, but not literally equal
+            # either), per 2026-09-02 user review. A vertical shared wall
+            # (bc_cases[0]/[1], the aRb/bRa cases) runs along y, so this
+            # applies to h; a horizontal one (bc_cases[2]/[3], aTb/bTa)
+            # runs along x, so it applies to w. bed_pk is always "a" in
+            # the _touch_cases() call above, so this indexing is
+            # consistent.
+            ratio_terms = ((h[closet_pk], h[bed_pk], bc_cases[0]),
+                            (h[closet_pk], h[bed_pk], bc_cases[1]),
+                            (w[closet_pk], w[bed_pk], bc_cases[2]),
+                            (w[closet_pk], w[bed_pk], bc_cases[3]))
+            if diagnose_infeasibility:
+                width_lit = m.new_bool_var(f"rule_closet_align_width_{bedroom}")
+                for closet_dim, bed_dim, case in ratio_terms:
+                    m.add(100 * closet_dim >= CLOSET_WIDTH_RATIO_MIN * bed_dim).only_enforce_if(
+                        [width_lit, case])
+                    m.add(100 * closet_dim <= CLOSET_WIDTH_RATIO_MAX * bed_dim).only_enforce_if(
+                        [width_lit, case])
+                m.add_assumption(width_lit)
+                lit_index_to_rule[width_lit.index] = f"closet_align_width:{bedroom}"
+            else:
+                for closet_dim, bed_dim, case in ratio_terms:
+                    m.add(100 * closet_dim >= CLOSET_WIDTH_RATIO_MIN * bed_dim).only_enforce_if(case)
+                    m.add(100 * closet_dim <= CLOSET_WIDTH_RATIO_MAX * bed_dim).only_enforce_if(case)
+
+            # position: closet must not land on the same side of the
+            # bedroom as the bedroom's own hallway adjacency (the wall a
+            # door would go on) -- door position itself isn't a solve-time
+            # variable (place_openings() is post-solve), so the hallway
+            # wall stands in for "the door wall". No-ops (not an error)
+            # for a bedroom with no hallway adjacency to compare against.
+            hall_adj = next((oa for oa in adjacencies if bedroom in (oa.a, oa.b) and
+                              (oa.a in hallway_set or oa.b in hallway_set)), None)
+            if hall_adj is None:
+                continue
+            hall_name = hall_adj.a if hall_adj.a in hallway_set else hall_adj.b
+            hall_pks = part_keys.get(hall_name, [])
+            if len(hall_pks) != 1:
+                continue
+            hall_pk = hall_pks[0]
+            bh_cases = _touch_cases(m, W, H, x1, x2, y1, y2, bed_pk, hall_pk, 1,
+                                     f"closetalign_hall_{bed_pk}_{hall_pk}")
+            m.add_bool_or(bh_cases)  # same reasoning as bc_cases above
+            if diagnose_infeasibility:
+                pos_lit = m.new_bool_var(f"rule_closet_align_position_{bedroom}")
+                for i in range(4):
+                    m.add_bool_or([bc_cases[i].Not(), bh_cases[i].Not()]).only_enforce_if(pos_lit)
+                m.add_assumption(pos_lit)
+                lit_index_to_rule[pos_lit.index] = f"closet_align_position:{bedroom}"
+            else:
+                for i in range(4):
+                    m.add_bool_or([bc_cases[i].Not(), bh_cases[i].Not()])
 
     # ------------------------------------------------------------------
     # objective: hit the area program as closely as possible, plus opt-in
@@ -587,6 +904,23 @@ def solve(footprint: Footprint,
             prox_terms.append(adx + ady)
         objective += proximity_weight * sum(prox_terms)
 
+    # soft adjacency preference: for each named pair, minimize the number
+    # of distinct x/y coordinate lines their combined edges use -- reuses
+    # _guideline_usage() (see alignment_weight above), scoped to just this
+    # pair's own parts instead of every room in the plan. Additive
+    # alongside proximity above, not a replacement -- Proximity rewards
+    # centroid closeness broadly; this specifically rewards actual wall-
+    # on-wall alignment (touching) for named pairs, without making it a
+    # hard requirement the way Adj is.
+    if adjacency_preferences and adjacency_weight > 0:
+        for i, pr in enumerate(adjacency_preferences):
+            pair_pks = part_keys[pr.a] + part_keys[pr.b]
+            x_edges = [(pk, x1[pk]) for pk in pair_pks] + [(pk, x2[pk]) for pk in pair_pks]
+            y_edges = [(pk, y1[pk]) for pk in pair_pks] + [(pk, y2[pk]) for pk in pair_pks]
+            used_x = _guideline_usage(m, W, x_edges, f"adjpref_x_{i}")
+            used_y = _guideline_usage(m, H, y_edges, f"adjpref_y_{i}")
+            objective += adjacency_weight * (sum(used_x) + sum(used_y))
+
     m.minimize(objective)
 
     s = cp_model.CpSolver()
@@ -627,6 +961,28 @@ def solve(footprint: Footprint,
         # meaningful either way: it's what tells a caller whether this was a
         # fast proof of INFEASIBLE or a full time_limit burned with nothing
         # to show for it.
+        if diagnose_infeasibility and status == cp_model.INFEASIBLE and diagnosis_out is not None:
+            # Re-solve once more, single-worker, against the SAME model (its
+            # assumptions are already baked in via add_assumption() above --
+            # a model's constraints/assumptions live on the CpModel, not the
+            # solver, so a fresh CpSolver instance still sees them). Cheap
+            # insurance paid only on this failure path: no confirmed single-
+            # worker requirement for sufficient_assumptions_for_infeasibility()
+            # was found in OR-Tools docs, and an empirical toy-model test
+            # worked fine at workers=8, but this is untested at production
+            # complexity, so pay for the guaranteed-safe path rather than
+            # assume.
+            s2 = cp_model.CpSolver()
+            s2.parameters.max_time_in_seconds = time_limit
+            s2.parameters.num_workers = 1
+            s2.parameters.random_seed = seed
+            status2 = s2.solve(m)
+            if status2 == cp_model.INFEASIBLE:
+                core = s2.sufficient_assumptions_for_infeasibility()
+                rule_ids = sorted({lit_index_to_rule[i] for i in core if i in lit_index_to_rule})
+                message = (f"These rules conflict: {', '.join(rule_ids)}." if rule_ids else
+                           "Infeasible, but the conflicting rules could not be identified.")
+                diagnosis_out.append(InfeasibilityDiagnosis(conflicting_rules=rule_ids, message=message))
         return None, s.status_name(status), None, None, s.wall_time
 
     plan = {}
@@ -646,7 +1002,10 @@ def solve(footprint: Footprint,
 # Post-processing
 # ----------------------------------------------------------------------
 
-def shared_walls(plan, min_len=3):
+def shared_walls(plan, min_len=6):  # grid-units (3ft) -- also not in the plan's
+                                     # units table; matches Adj.min_shared's own
+                                     # default so "shared wall long enough for a
+                                     # door" means the same threshold everywhere
     """Recover the real adjacency graph from the solved geometry.
 
     Each room may be several rectangular parts (L-shaped rooms); two
@@ -692,13 +1051,17 @@ def circulation_ok(plan, entry, private=()):
 
 
 def place_openings(plan, fp: Footprint, adjacencies: List[Adj], rooms: List[Room],
-                    door_width: float = 3.0, window_width: float = 4.0):
+                    door_width: float = 6.0, window_width: float = 8.0):
     """Best-effort door/window placement from the solved geometry alone --
     no solver change. One door per adjacency, centered on the longest wall
     segment shared by any pair of parts from the two rooms (same overlap
     test as shared_walls(), but this needs the segment's actual position,
-    not just its length). One window per daylight-required room, centered
-    on its longest exterior-touching segment.
+    not just its length) -- except a hall-to-public-room adjacency (e.g.
+    Hall-Living), which gets no door at all: that's an open threshold, not
+    a doorway (added 2026-09-02, plan review) -- a door belongs where a
+    hallway meets a *private* room (bedroom/bath), which still gets one
+    normally. One window per daylight-required room, centered on its
+    longest exterior-touching segment.
 
     Returns a list of dicts: kind ("door"/"window"), orient ("V"/"H"), and
     an (x1, y1, x2, y2) box in grid units -- a thin rect along the wall,
@@ -731,6 +1094,8 @@ def place_openings(plan, fp: Footprint, adjacencies: List[Adj], rooms: List[Room
 
     openings = []
     for ad in adjacencies:
+        if {room_kind(ad.a), room_kind(ad.b)} == {"hall", "living"}:
+            continue  # open threshold, not a doorway
         seg = best_shared_segment(plan[ad.a]["parts"], plan[ad.b]["parts"], door_width)
         if not seg:
             continue
@@ -828,6 +1193,14 @@ def _room_polygon(parts):
     return loop
 
 
+def _feet_inches(units):
+    """Grid-units (6in each) -> a "X'-Y\"" dimension string. Needed once the
+    unit migration lets a linear dimension land on an odd grid-unit (a real
+    half-foot), which whole-feet formatting used to be able to assume away."""
+    ft, rem = divmod(units, 2)
+    return f'{ft}\'-{6 * rem}"'
+
+
 def _door_svg(o, scale, H):
     """Door leaf + quarter-circle swing arc (the standard plan symbol),
     radius/width equal to the opening -- drawn in place of a flat rect so
@@ -880,7 +1253,7 @@ def _north_arrow(x, y):
 
 
 def _scale_bar(x0, y, scale):
-    length = 10 * scale
+    length = 20 * scale  # 10 real feet = 20 grid-units
     return (f'<line x1="{x0}" y1="{y}" x2="{x0+length}" y2="{y}" stroke="{INK}" stroke-width="1.5"/>'
             f'<line x1="{x0}" y1="{y-4}" x2="{x0}" y2="{y+4}" stroke="{INK}" stroke-width="1.5"/>'
             f'<line x1="{x0+length}" y1="{y-4}" x2="{x0+length}" y2="{y+4}" stroke="{INK}" stroke-width="1.5"/>'
@@ -931,7 +1304,7 @@ def _exterior_dims(W, H, scale, plan=None):
     for x in (0, W * scale):
         p.append(f'<line x1="{x}" y1="0" x2="{x}" y2="{y}" stroke="{INK}" stroke-width="0.75" opacity="0.6"/>')
     p.append(f'<text x="{W*scale/2}" y="{y-3}" font-family="{FONT_MONO}" font-size="9.5" '
-             f'text-anchor="middle" fill="{INK}">{W}\'-0"</text>')
+             f'text-anchor="middle" fill="{INK}">{_feet_inches(W)}</text>')
     xb = breaks_on_edge(True)
     for gx in xb[1:-1]:
         p.append(f'<line x1="{gx*scale}" y1="2" x2="{gx*scale}" y2="{y}" '
@@ -939,7 +1312,7 @@ def _exterior_dims(W, H, scale, plan=None):
     for a, b in zip(xb, xb[1:]):
         if (b - a) * scale >= MIN_SPAN_LABEL_PX:
             p.append(f'<text x="{(a+b)/2*scale}" y="-2" font-family="{FONT_MONO}" font-size="8" '
-                     f'text-anchor="middle" fill="{INK}" opacity="0.75">{b-a}\'</text>')
+                     f'text-anchor="middle" fill="{INK}" opacity="0.75">{_feet_inches(b-a)}</text>')
 
     x = -24
     p.append(f'<line x1="{x}" y1="0" x2="{x}" y2="{H*scale}" stroke="{INK}" stroke-width="1"/>')
@@ -947,7 +1320,7 @@ def _exterior_dims(W, H, scale, plan=None):
         p.append(f'<line x1="{x}" y1="{gy}" x2="0" y2="{gy}" stroke="{INK}" stroke-width="0.75" opacity="0.6"/>')
     p.append(f'<text x="{x-4}" y="{H*scale/2}" font-family="{FONT_MONO}" font-size="9.5" '
              f'text-anchor="middle" fill="{INK}" transform="rotate(-90 {x-4} {H*scale/2})">'
-             f'{H}\'-0"</text>')
+             f'{_feet_inches(H)}</text>')
     yb = breaks_on_edge(False)
     for gy in yb[1:-1]:
         gy_svg = (H - gy) * scale
@@ -958,12 +1331,12 @@ def _exterior_dims(W, H, scale, plan=None):
             mid_svg = (H - (a + b) / 2) * scale
             p.append(f'<text x="-2" y="{mid_svg}" font-family="{FONT_MONO}" font-size="8" '
                      f'text-anchor="middle" fill="{INK}" opacity="0.75" '
-                     f'transform="rotate(-90 -2 {mid_svg})">{b-a}\'</text>')
+                     f'transform="rotate(-90 -2 {mid_svg})">{_feet_inches(b-a)}</text>')
     return p
 
 
-def to_svg(plan, fp: Footprint, scale=14, path="plan.svg", openings=None,
-           interior_thickness=0.3, exterior_thickness=0.5, title_block=None):
+def to_svg(plan, fp: Footprint, scale=7, path="plan.svg", openings=None,
+           interior_thickness=0.6, exterior_thickness=1.0, title_block=None):
     """Renders the plan to SVG. If path is None, returns the markup string
     directly instead of writing to disk -- use this from a server handling
     concurrent requests, since writing every request to the same path is a
@@ -979,7 +1352,7 @@ def to_svg(plan, fp: Footprint, scale=14, path="plan.svg", openings=None,
     complexity while the seam-merge itself is still new.
 
     Rooms are filled by use (living/sleep/wet/closet-hatch, Hall left
-    neutral) on a 1ft graph-paper grid, doors draw as a swing arc and
+    neutral) on a 1ft-light/5ft-heavy graph-paper grid, doors draw as a swing arc and
     windows as a double line rather than a flat colored rect. The sheet
     carries overall width/depth dimension strings, a north arrow, and a
     10ft scale bar; title_block, if given, is
@@ -1003,13 +1376,24 @@ def to_svg(plan, fp: Footprint, scale=14, path="plan.svg", openings=None,
          f'<line x1="0" y1="0" x2="0" y2="6" stroke="{INK}" stroke-width="1" opacity="0.25"/>'
          f'</pattern></defs>',
          f'<rect x="-{margin_left}" y="-{margin_top}" width="100%" height="100%" fill="{SHEET}"/>']
-    for gx in range(W + 1):
-        heavy = gx % 5 == 0
+    # light line every 2 grid-units (1 real foot), heavy every 10 (5ft) --
+    # was every-1/every-5 pre-migration, when 1 grid-unit was 1ft instead
+    # of 6in (drawing a line every single 6in grid-unit here would be far
+    # too dense to read as graph paper). Footprint dimensions can now land
+    # on an odd grid-unit (a real half-foot) -- append the boundary
+    # explicitly when a plain step-2 range would land just short of it.
+    def _grid_lines(dim):
+        lines = list(range(0, dim + 1, 2))
+        if lines[-1] != dim:
+            lines.append(dim)
+        return lines
+    for gx in _grid_lines(W):
+        heavy = gx % 10 == 0
         p.append(f'<line x1="{gx*scale}" y1="0" x2="{gx*scale}" y2="{H*scale}" '
                   f'stroke="{GRID}" stroke-width="{1 if heavy else 0.5}" '
                   f'opacity="{0.55 if heavy else 0.3}"/>')
-    for gy in range(H + 1):
-        heavy = gy % 5 == 0
+    for gy in _grid_lines(H):
+        heavy = gy % 10 == 0
         p.append(f'<line x1="0" y1="{gy*scale}" x2="{W*scale}" y2="{gy*scale}" '
                   f'stroke="{GRID}" stroke-width="{1 if heavy else 0.5}" '
                   f'opacity="{0.55 if heavy else 0.3}"/>')
@@ -1040,10 +1424,10 @@ def to_svg(plan, fp: Footprint, scale=14, path="plan.svg", openings=None,
             cx, cy = (ix1 + ix2) / 2 * scale, (H - (iy1 + iy2) / 2) * scale
             pxw, pxh = (ix2 - ix1) * scale, (iy2 - iy1) * scale
             w, h = part["x2"] - part["x1"], part["y2"] - part["y1"]
-            dims = f'{w}\'-0" × {h}\'-0"'
+            dims = f'{_feet_inches(w)} × {_feet_inches(h)}'
             if part is biggest:
                 name_label = display_name(n)
-                area_label = f'{room["area"]} SF'
+                area_label = f'{room["area"] / 4:,.0f} SF'  # grid-units^2 -> real sf
                 if pxw >= 70 and pxh >= 40:
                     # room's big enough for the full three-line label
                     max_chars = max(4, int(pxw / 6.8))
